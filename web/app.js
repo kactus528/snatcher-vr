@@ -179,7 +179,17 @@ setBadge('off', 'NO 3D MAP');
 
 /* ---- making maps on the headset for scenes that don't have one ---- */
 const localGen = { enabled: true, worker: null, busy: null, working: false, ready: false, skip: [], loadingShown: false };
-try { localGen.enabled = localStorage.getItem('snatcher-vr.localmaps') !== '0'; } catch {}
+// off until switched on: it's heavy for a Quest 2 running the game at the same time
+try { localGen.enabled = localStorage.getItem('snatcher-vr.localmaps.v2') === '1'; } catch { localGen.enabled = false; }
+// If the browser died while a map was being made, don't try again automatically.
+let crashedLastTime = false;
+try {
+  if (localStorage.getItem('snatcher-vr.mapping')) {
+    crashedLastTime = true; localGen.enabled = false;
+    localStorage.setItem('snatcher-vr.localmaps.v2', '0'); localStorage.removeItem('snatcher-vr.mapping');
+  }
+} catch {}
+const markMapping = (on) => { try { on ? localStorage.setItem('snatcher-vr.mapping', String(Date.now())) : localStorage.removeItem('snatcher-vr.mapping'); } catch {} };
 
 async function mapsDir() { return (await navigator.storage.getDirectory()).getDirectoryHandle('depthmaps', { create: true }); }
 
@@ -241,8 +251,9 @@ async function makeLocalMapInner(w, h, rgba, fp) {
       // first run includes the one-time model download, so allow plenty of time
       const limit = setTimeout(() => { localGen.busy = null; reject({ msg: 'the depth model took too long' }); }, localGen.ready ? 120000 : 600000);
       localGen.busy = { resolve: (v) => { clearTimeout(limit); resolve(v); }, reject: (v) => { clearTimeout(limit); reject(v); } };
+      markMapping(true);
       depthWorker().postMessage({ type: 'infer', id: Date.now(), input, size: SIZE }, [input.buffer]);
-    });
+    }).finally(() => markMapping(false));
   } catch (err) {
     localGen.skip.push({ w, h, fp });
     status('Could not make a 3D map: ' + (err.msg || err.message), 'error');
@@ -294,7 +305,7 @@ function recogniseScene(w, h, rgba) {
 $('localMaps').checked = localGen.enabled;
 $('localMaps').addEventListener('change', (e) => {
   localGen.enabled = e.target.checked;
-  try { localStorage.setItem('snatcher-vr.localmaps', e.target.checked ? '1' : '0'); } catch {}
+  try { localStorage.setItem('snatcher-vr.localmaps.v2', e.target.checked ? '1' : '0'); } catch {}
 });
 
 function applyView() {
@@ -573,4 +584,5 @@ renderer.setAnimationLoop(() => {
 fitCamera();
 refreshLibrary();
 window.__snatcherVR = { showFrame, depthLib, view3d, applyView, localGen };
+if (crashedLastTime) status('The browser closed while making a 3D map last time, so making maps on the headset has been switched off. Scenes that already have maps still work.', 'error');
 if (!store.hasOPFS) status('This browser cannot keep files between visits, so you will need to pick them each time.', 'error');

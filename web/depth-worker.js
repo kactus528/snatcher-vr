@@ -9,45 +9,53 @@ ort.env.wasm.numThreads = 1;          // GitHub Pages can't enable shared-memory
 
 const MODEL_URL = new URL('./models/depth_anything_v2_vits.onnx', self.location.href).href;
 const MODEL_FILE = 'depth_anything_v2_vits.onnx';
-let session = null, backend = '', modelData = null;
+let session = null, backend = '';
 
+// Download straight into storage (never holding the whole file twice in memory),
+// then read it back once for the runtime.
 async function modelBytes() {
   const root = await navigator.storage.getDirectory();
   const dir = await root.getDirectoryHandle('models', { create: true });
-  try {
-    const f = await (await dir.getFileHandle(MODEL_FILE)).getFile();
-    if (f.size > 1e6) return new Uint8Array(await f.arrayBuffer());
-  } catch {}
-  const res = await fetch(MODEL_URL);
-  if (!res.ok) throw new Error(`Couldn't download the depth model (HTTP ${res.status}).`);
-  const total = +res.headers.get('content-length') || 0;
-  const reader = res.body.getReader(), parts = []; let got = 0, lastPost = 0;
-  for (;;) {
-    const { done, value } = await reader.read(); if (done) break;
-    parts.push(value); got += value.length;
-    if (total && Date.now() - lastPost > 400) { lastPost = Date.now(); postMessage({ type: 'progress', fraction: got / total }); }
+  const cached = async () => {
+    try { const f = await (await dir.getFileHandle(MODEL_FILE)).getFile(); return f.size > 1e6 ? f : null; } catch { return null; }
+  };
+  let file = await cached();
+  if (!file) {
+    const res = await fetch(MODEL_URL);
+    if (!res.ok) throw new Error(`Couldn't download the depth model (HTTP ${res.status}).`);
+    const total = +res.headers.get('content-length') || 0;
+    const tmp = await dir.getFileHandle(MODEL_FILE + '.part', { create: true });
+    const w = await tmp.createWritable();
+    let got = 0, lastPost = 0;
+    await res.body.pipeThrough(new TransformStream({ transform(chunk, ctl) {
+      got += chunk.length;
+      if (total && Date.now() - lastPost > 400) { lastPost = Date.now(); postMessage({ type: 'progress', fraction: got / total }); }
+      ctl.enqueue(chunk);
+    } })).pipeTo(w);
+    // finished download: give it its real name
+    const done = await dir.getFileHandle(MODEL_FILE, { create: true });
+    const w2 = await done.createWritable();
+    await (await tmp.getFile()).stream().pipeTo(w2);
+    await dir.removeEntry(MODEL_FILE + '.part');
+    file = await cached();
   }
-  const bytes = new Uint8Array(got); let o = 0; for (const p of parts) { bytes.set(p, o); o += p.length; }
-  try {
-    const w = await (await dir.getFileHandle(MODEL_FILE, { create: true })).createWritable();
-    await w.write(bytes); await w.close();
-  } catch {}
-  return bytes;
+  return new Uint8Array(await file.arrayBuffer());
 }
 
-let forceCPU = false;
+let forceCPU = false, useGPU = false;
 async function load() {
   if (session) return;
-  const bytes = modelData || (modelData = await modelBytes());
+  let bytes = await modelBytes();
   postMessage({ type: 'progress', fraction: 1 });
-  // GPU if the browser offers it, otherwise the CPU
-  for (const ep of (forceCPU ? ['wasm'] : ['webgpu', 'wasm'])) {
+  // CPU by default: on a Quest 2 the GPU shares the headset's memory with the game
+  for (const ep of (forceCPU || !useGPU ? ['wasm'] : ['webgpu', 'wasm'])) {
     try {
       if (ep === 'webgpu' && !(self.navigator.gpu && await self.navigator.gpu.requestAdapter())) continue;
       session = await ort.InferenceSession.create(bytes, { executionProviders: [ep], graphOptimizationLevel: 'all' });
       backend = ep; break;
     } catch (e) { session = null; }
   }
+  bytes = null;                                   // the runtime has its own copy now
   if (!session) throw new Error('The depth model could not start on this device.');
   postMessage({ type: 'ready', backend });
 }
@@ -57,6 +65,7 @@ onmessage = async (e) => {
   try {
     if (m.type === 'load') { await load(); return; }
     if (m.type === 'infer') {
+      useGPU = !!m.useGPU;
       await load();
       const t0 = performance.now();
       const input = new ort.Tensor('float32', m.input, [1, 3, m.size, m.size]);
