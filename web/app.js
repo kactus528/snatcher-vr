@@ -106,7 +106,12 @@ const sheets = GROUPS.map((g, i) => {
         float t = floor(texture2D(tagTex, vUv).r * 255.0 + 0.5);
         if (full < 0.5 && inGroup(t) < 0.5) discard;
         vec4 c = texture2D(colorTex, vUv);
-        if (showTint > 0.5) c.rgb = mix(c.rgb, tint, (full > 0.5 && inGroup(t) < 0.5) ? 0.0 : 0.55);
+        if (showTint > 0.5 && !(full > 0.5 && inGroup(t) < 0.5)) {
+          vec3 tc = tint;
+          if (t > 254.5) tc = vec3(0.55);              // unknown: video mode without layer info (grey)
+          else if (t < 0.5) tc = vec3(0.45, 0.2, 0.6); // backdrop colour, no layer drawn here (purple)
+          c.rgb = mix(c.rgb, tc, 0.55);
+        }
         gl_FragColor = c;   // emulator colours pass straight through
       }`,
     depthWrite: false,   // sheets stack by draw order, back to front
@@ -195,7 +200,7 @@ cv.addEventListener('pointermove', (e) => {
 cv.addEventListener('pointerup', () => { drag = null; });
 cv.addEventListener('dblclick', () => { tiltX = tiltY = 0; });
 
-$('viewMode').addEventListener('change', (e) => { view3d.mode = e.target.value; saveView(); applyView(); });
+$('viewMode').addEventListener('change', (e) => { view3d.mode = e.target.value; saveView(); applyView(); status(MODE_NAMES[view3d.mode], 'ok'); });
 $('depthStrength').addEventListener('input', (e) => { view3d.strength = +e.target.value; saveView(); applyView(); });
 applyView();
 
@@ -215,7 +220,12 @@ function stickDirs(x, y, out) {
 
 let prevStickPress = false, depthDirty = false;
 const MODES = ['flat', 'depth', 'layers'];
-function cycleView() { view3d.mode = MODES[(MODES.indexOf(view3d.mode) + 1) % MODES.length]; saveView(); applyView(); }
+const MODE_NAMES = { flat: 'View: flat screen', depth: 'View: layer depth',
+  layers: 'View: layer colours. Blue = plane B, green = plane A, yellow = window/text, orange/pink = sprites, purple = backdrop, grey = unknown' };
+function cycleView() {
+  view3d.mode = MODES[(MODES.indexOf(view3d.mode) + 1) % MODES.length]; saveView(); applyView();
+  status(MODE_NAMES[view3d.mode], 'ok');
+}
 
 function readPad() {
   const held = new Set(keys);
