@@ -56,6 +56,7 @@ td{padding:4px 0;border-top:1px solid var(--line);vertical-align:top}
 td:first-child{color:var(--muted);width:46%}
 .field{display:grid;grid-template-columns:7.5rem minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
 .field label{font-size:.8rem}
+.field input[type=checkbox]{accent-color:var(--accent);width:18px;height:18px;margin:0}
 select{font:inherit;font-size:.8rem;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:3px;padding:6px;grid-column:2/4}
 input[type=range]{accent-color:var(--accent);min-width:0}
 .val{font-size:.75rem;color:var(--muted);font-variant-numeric:tabular-nums;min-width:4ch;text-align:right}
@@ -120,6 +121,19 @@ body:not([data-running]) .when-running{display:none}
       <p class="hint">Each layer of the Sega's picture sits at its own distance: backgrounds at the back, sprites and text boxes in front. Drag the picture to tilt it; double-click to straighten.</p>
     </section>
     <section>
+      <h2>Scene capture</h2>
+      <div class="field">
+        <input id="autoCapture" type="checkbox">
+        <label for="autoCapture" style="grid-column:2/4">Save each new scene automatically</label>
+      </div>
+      <div class="actions" style="margin-top:8px">
+        <button id="captureNow">Capture now</button>
+        <button id="downloadCaptures" disabled>Download all</button>
+        <button id="clearCaptures" disabled>Delete all</button>
+      </div>
+      <p class="hint"><span id="captureCount">0 scenes saved</span>. Each capture keeps the picture, a colour map of its layers and a fingerprint so the game can recognise it later. These become the depth maps.</p>
+    </section>
+    <section>
       <h2>Quest controls</h2>
       <table>
         <tr><td>Left stick</td><td>D-pad</td></tr>
@@ -129,6 +143,7 @@ body:not([data-running]) .when-running{display:none}
         <tr><td>Y button / right grip</td><td>Start</td></tr>
         <tr><td>Left stick click</td><td>Change view</td></tr>
         <tr><td>Right stick up/down</td><td>Depth amount</td></tr>
+        <tr><td>Right stick click</td><td>Capture scene</td></tr>
       </table>
       <p class="hint">Keyboard: arrows, <kbd>Z</kbd> <kbd>X</kbd> <kbd>C</kbd> for A B C, <kbd>Enter</kbd> for Start. Game saves are kept automatically.</p>
     </section>

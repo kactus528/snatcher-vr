@@ -63,7 +63,7 @@ against the known layout built by `test/make_layers_rom.py`).
 
 1. ✅ Emulator in the browser, flat screen in VR
 2. ✅ Per-pixel layer tags from the video chip, shown as stacked depth layers
-3. Scene recognition by hashing plane B's tiles
+3. Scene capture ✅ (picture + layer map + fingerprint, downloadable as a zip); scene recognition from fingerprints next
 4. Depth-map diorama renderer combining layer depth + scene depth maps
 5. Capture mode and depth-map authoring pipeline
 6. Light-gun aiming with the controller, sharp text layer, polish

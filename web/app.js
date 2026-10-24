@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import * as store from './storage.js';
 import { SEGA } from './core.js';
+import { Captures } from './captures.js';
 
 const $ = (id) => document.getElementById(id);
 const status = (msg, kind = '') => { const s = $('status'); s.textContent = msg; s.dataset.kind = kind; vrStatus(msg, kind); };
@@ -218,7 +219,7 @@ function stickDirs(x, y, out) {
   if (x < -t) out.add('LEFT'); if (x > t) out.add('RIGHT');
 }
 
-let prevStickPress = false, depthDirty = false;
+let prevStickPress = false, prevRightPress = false, depthDirty = false;
 const MODES = ['flat', 'depth', 'layers'];
 const MODE_NAMES = { flat: 'View: flat screen', depth: 'View: layer depth',
   layers: 'View: layer colours. Blue = plane B, green = plane A, yellow = window/text, orange/pink = sprites, purple = backdrop, grey = unknown' };
@@ -243,6 +244,8 @@ function readPad() {
         if (b(3) && !prevStickPress) cycleView();   // left stick click: flat → depth → layer colours
         prevStickPress = b(3);
       } else {
+        if (b(3) && !prevRightPress) captureNow();  // right stick click: capture this scene
+        prevRightPress = b(3);
         const ry = gp.axes[3] || 0;               // right stick up/down: depth amount
         if (Math.abs(ry) > 0.3) { view3d.strength = Math.max(0, Math.min(1, view3d.strength - ry * 0.008)); applyView(); depthDirty = true; }
         if (b(0)) held.add('A');        // right trigger
@@ -295,7 +298,11 @@ async function start() {
 
 function onWorker(e) {
   const m = e.data;
-  if (m.type === 'frame') showFrame(m.w, m.h, m.rgba, m.tags);
+  if (m.type === 'frame') {
+    showFrame(m.w, m.h, m.rgba, m.tags);
+    const saving = captures.frame(m.w, m.h, m.rgba, m.tags);
+    if (saving) saving.then((id) => id && status(`Captured ${id}`, 'ok')).catch((err) => status('Capture failed: ' + err.message, 'error'));
+  }
   else if (m.type === 'started') { status('Running. Keyboard: arrows, Z/X/C, Enter. In VR, see the button guide.', 'ok'); document.body.dataset.running = '1'; }
   else if (m.type === 'error') { status(m.msg, 'error'); }
   else if (m.type === 'log') { console.log(m.msg); }
@@ -316,6 +323,41 @@ document.addEventListener('visibilitychange', () => {
   if (!worker) return;
   worker.postMessage({ type: document.hidden ? 'pause' : 'resume' });
   if (audioCtx) document.hidden ? audioCtx.suspend() : audioCtx.resume();
+});
+
+/* ------------------------------------------------------------------ captures */
+const captures = new Captures({ onChange: (n) => {
+  $('captureCount').textContent = n === 1 ? '1 scene saved' : `${n} scenes saved`;
+  $('downloadCaptures').disabled = $('clearCaptures').disabled = n === 0;
+} });
+captures.load();
+try { captures.auto = localStorage.getItem('snatcher-vr.autocapture') === '1'; } catch {}
+$('autoCapture').checked = captures.auto;
+$('autoCapture').addEventListener('change', (e) => {
+  captures.auto = e.target.checked;
+  try { localStorage.setItem('snatcher-vr.autocapture', captures.auto ? '1' : '0'); } catch {}
+});
+async function captureNow() {
+  if (!worker) return status('Start the game first, then capture.', 'error');
+  try { const id = await captures.captureNow(); if (id) status(`Captured ${id}`, 'ok'); }
+  catch (err) { status('Capture failed: ' + err.message, 'error'); }
+}
+$('captureNow').addEventListener('click', captureNow);
+$('downloadCaptures').addEventListener('click', async () => {
+  status('Packing captures…');
+  const blob = await captures.zip();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'snatcher-captures.zip';
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  status(`Downloaded snatcher-captures.zip (${Math.round(blob.size / 1024)} KB).`, 'ok');
+});
+let clearArmed = 0;
+$('clearCaptures').addEventListener('click', async () => {
+  const btn = $('clearCaptures');
+  if (Date.now() - clearArmed > 4000) { clearArmed = Date.now(); btn.textContent = 'Tap again to delete'; setTimeout(() => { btn.textContent = 'Delete all'; }, 4000); return; }
+  clearArmed = 0; btn.textContent = 'Delete all';
+  await captures.clear(); status('Captures deleted.', 'ok');
 });
 
 /* ------------------------------------------------------------------ VR */
