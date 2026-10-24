@@ -155,6 +155,7 @@ onmessage = async (e) => {
       case 'pad': pad = m.mask; break;
       case 'smooth': smoothScale = m.scale; break;
       case 'gun': gun = m.gun; break;
+      case 'port2': if (core) core.setDevice(1, m.device); break;
       case 'reset': core && core.reset(); break;
       case 'pause': running = false; await persistSaves(); break;
       case 'resume': if (core && !running) { running = true; last = performance.now(); tick(); } break;

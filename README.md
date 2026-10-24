@@ -27,6 +27,7 @@ Game saves (Sega CD backup RAM) are written automatically. Save states are on th
 | B | Cancel (B) |
 | X | Draw blaster (A) |
 | Y / right grip | Start |
+| Right trigger (light gun on) | Fire the Justifier: aim with the right controller |
 
 Keyboard: arrows, Z/X/C, Enter.
 
@@ -84,7 +85,8 @@ committed, never the captured artwork.
 3. Scene capture ✅ (picture + layer map + fingerprint, downloadable as a zip); scene recognition from fingerprints next
 4. ✅ Depth-map diorama: recognised scenes are bent into 3D by their depth map; others fall back to layer depth
 5. ✅ Depth-map pipeline: `tools/make_depth.py` turns capture zips into `web/depth/` maps (hand touch-ups welcome)
-6. Light-gun aiming with the controller, sharp text layer, polish
+6. ✅ Justifier light gun: a virtual Justifier in port 2, aimed by tracing the right controller's ray against the 3D screen (`web/gun.js`)
+7. Sharp text layer, polish
 
 Genesis Plus GX is licensed for non-commercial use; see its license. three.js (MIT) is
 vendored in `web/lib`.

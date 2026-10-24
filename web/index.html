@@ -140,6 +140,14 @@ body:not([data-running]) .when-running{display:none}
       <p class="hint">Each layer of the Sega's picture sits at its own distance: backgrounds at the back, sprites and text boxes in front. Drag the picture to tilt it; double-click to straighten.</p>
     </section>
     <section>
+      <h2>Light gun</h2>
+      <div class="field">
+        <input id="justifier" type="checkbox" checked>
+        <label for="justifier" style="grid-column:2/4">Justifier in port 2, aimed with the right controller</label>
+      </div>
+      <p class="hint">In Snatcher, open Options and set DEVICE to the Justifier. Then point the right controller at the screen and pull its trigger to shoot; the grip is the gun's start button. Shooting off the screen reloads.</p>
+    </section>
+    <section>
       <h2>Scene capture</h2>
       <div class="field">
         <input id="autoCapture" type="checkbox">
@@ -157,6 +165,7 @@ body:not([data-running]) .when-running{display:none}
       <table>
         <tr><td>Left stick</td><td>D-pad</td></tr>
         <tr><td>A button or either trigger</td><td>Select / shoot (C)</td></tr>
+        <tr><td>Right trigger (light gun on)</td><td>Fire the Justifier</td></tr>
         <tr><td>B button</td><td>Cancel (B)</td></tr>
         <tr><td>X button</td><td>Draw blaster (A)</td></tr>
         <tr><td>Y button / right grip</td><td>Start</td></tr>

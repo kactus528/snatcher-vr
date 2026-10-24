@@ -3,6 +3,7 @@ import * as store from './storage.js';
 import { SEGA } from './core.js';
 import { Captures, fingerprint, distance, distanceIn, GW, GH } from './captures.js';
 import { SIZE, topDown, pictureBox, modelInput, depthMap, mapToPNG } from './depthgen.js';
+import { aim, makeHeightField } from './gun.js';
 
 const $ = (id) => document.getElementById(id);
 const status = (msg, kind = '') => { const s = $('status'); s.textContent = msg; s.dataset.kind = kind; vrStatus(msg, kind); };
@@ -556,7 +557,7 @@ function readPad() {
         prevRightPress = b(3);
         const ry = gp.axes[3] || 0;               // right stick up/down: depth amount
         if (Math.abs(ry) > 0.3) { view3d.strength = Math.max(0, Math.min(1, view3d.strength - ry * 0.008)); applyView(); depthDirty = true; }
-        if (b(0)) held.add('C');        // right trigger: select / shoot
+        if (b(0) && !gunState.enabled) held.add('C');   // right trigger: select / shoot (fires the Justifier in gun mode)
         if (b(4)) held.add('C');        // A: select
         if (b(5)) held.add('B');        // B: cancel
         if (b(1)) held.add('START');    // right grip
@@ -612,7 +613,8 @@ function onWorker(e) {
     if (saving) saving.then((id) => id && status(`Captured ${id}`, 'ok')).catch((err) => status('Capture failed: ' + err.message, 'error'));
   }
   else if (m.type === 'started') {
-    worker.postMessage({ type: 'smooth', scale: view3d.smoothing === 'smooth' ? 4 : 1 }); status('Running. Keyboard: arrows, Z/X/C, Enter. In VR, see the button guide.', 'ok'); document.body.dataset.running = '1'; }
+    worker.postMessage({ type: 'smooth', scale: view3d.smoothing === 'smooth' ? 4 : 1 });
+    if (gunState.enabled) worker.postMessage({ type: 'port2', device: JUSTIFIER }); status('Running. Keyboard: arrows, Z/X/C, Enter. In VR, see the button guide.', 'ok'); document.body.dataset.running = '1'; }
   else if (m.type === 'error') { status(m.msg, 'error'); }
   else if (m.type === 'log') { console.log(m.msg); }
   else if (m.type === 'state') store.writeState(m.slot, m.data).then(() => status('State saved.', 'ok'));
@@ -689,6 +691,94 @@ vrBtn.addEventListener('click', async () => {
 });
 
 /* ------------------------------------------------------------------ loop */
+/* ------------------------------------------------------------------ Justifier light gun */
+// A virtual Justifier sits in the Sega's second controller port. The right
+// controller aims it: its ray is traced against the (possibly 3D) screen, and the
+// trigger fires. Select the Justifier as DEVICE on Snatcher's options screen.
+const JUSTIFIER = (3 << 8) | 4;     // RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_LIGHTGUN, 2)
+const gunState = { enabled: true, last: '', trigger: false };
+try { gunState.enabled = localStorage.getItem('snatcher-vr.justifier') !== '0'; } catch {}
+$('justifier').checked = gunState.enabled;
+$('justifier').addEventListener('change', (e) => {
+  gunState.enabled = e.target.checked;
+  try { localStorage.setItem('snatcher-vr.justifier', e.target.checked ? '1' : '0'); } catch {}
+  if (worker) worker.postMessage({ type: 'port2', device: gunState.enabled ? JUSTIFIER : 1 });
+});
+
+const controllers = [0, 1].map((i) => {
+  const c = renderer.xr.getController(i);
+  c.addEventListener('connected', (e) => { c.userData.hand = e.data.handedness; c.userData.source = e.data; });
+  c.addEventListener('disconnected', () => { c.userData.hand = null; });
+  scene.add(c);
+  return c;
+});
+// aiming laser and the dot where it lands
+const laser = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, -1)]),
+  new THREE.LineBasicMaterial({ color: 0xff5a4a, transparent: true, opacity: 0.55 }));
+laser.visible = false; scene.add(laser);
+const dot = new THREE.Mesh(new THREE.RingGeometry(0.012, 0.02, 24), new THREE.MeshBasicMaterial({ color: 0xff5a4a, depthTest: false }));
+dot.renderOrder = 200; dot.visible = false; scene.add(dot);
+
+function heightField(sceneMap) {
+  if (!sceneMap) return null;
+  if (sceneMap.field) return sceneMap.field;
+  const tex = depthLib.textures.get(sceneMap.id), img = tex && tex.image;
+  if (!img || !img.width) return null;              // still loading
+  try { sceneMap.field = makeHeightField(img); } catch { return null; }
+  return sceneMap.field;
+}
+
+const _o = new THREE.Vector3(), _d = new THREE.Vector3(), _inv = new THREE.Matrix4(), _q = new THREE.Quaternion();
+// world-space ray → { u, v } on the game picture (v from the top), or null
+function gunAim(originWorld, dirWorld) {
+  screen.updateMatrixWorld();
+  _inv.copy(screen.matrixWorld).invert();
+  _o.copy(originWorld).applyMatrix4(_inv);
+  _d.copy(dirWorld).transformDirection(_inv);
+  const mapped = diorama.visible ? depthLib.current : null;
+  const amount = mapped ? dioramaMat.uniforms.amount.value : 0;
+  const ov = overlayTex.image;
+  const cardHit = card_visible() ? { z: card.position.z, covered: (u, v) => {
+    if (!ov || !ov.data || ov.width < 2) return false;
+    const x = Math.min(ov.width - 1, (u * ov.width) | 0), y = Math.min(ov.height - 1, ((1 - v) * ov.height) | 0);  // mask rows are bottom-up
+    return ov.data[y * ov.width + x] > 0;
+  } } : null;
+  return aim(_o, _d, SCREEN_W, SCREEN_W * 0.75, heightField(mapped), amount, cardHit);
+}
+const card_visible = () => card.visible && overlayCount > 0;
+
+function updateGun() {
+  laser.visible = dot.visible = false;
+  if (!gunState.enabled || !worker || !renderer.xr.isPresenting) return;
+  const ctl = controllers.find((c) => c.userData.hand === 'right');
+  const src = ctl && ctl.userData.source, gp = src && src.gamepad;
+  if (!ctl || !gp) return;
+  ctl.updateMatrixWorld();
+  _o.setFromMatrixPosition(ctl.matrixWorld);
+  ctl.getWorldQuaternion(_q);
+  _d.set(0, 0, -1).applyQuaternion(_q).normalize();
+  const origin = _o.clone(), dirW = _d.clone();
+  const hit = gunAim(origin, dirW);
+  const trigger = !!(gp.buttons[0] && gp.buttons[0].pressed), start = !!(gp.buttons[1] && gp.buttons[1].pressed);
+  if (trigger && !gunState.trigger) { try { gp.hapticActuators && gp.hapticActuators[0] && gp.hapticActuators[0].pulse(0.7, 60); } catch {} }
+  gunState.trigger = trigger;
+
+  // draw the laser to the hit (or 3 m out on a miss)
+  let len = 3;
+  if (hit) {
+    const local = new THREE.Vector3((hit.u - 0.5) * SCREEN_W, (0.5 - hit.v) * SCREEN_W * 0.75, 0);
+    const world = screen.localToWorld(local.clone());
+    len = Math.max(0.05, world.distanceTo(origin) - 0.02);
+    dot.position.copy(origin).addScaledVector(dirW, len); dot.quaternion.copy(screen.getWorldQuaternion(new THREE.Quaternion()));
+    dot.visible = true;
+  }
+  laser.position.copy(origin); laser.quaternion.copy(_q); laser.scale.set(1, 1, len); laser.visible = true;
+
+  const gun = { x: hit ? hit.u : 0, y: hit ? hit.v : 0, buttons: (trigger ? 1 : 0) | (start ? 8 : 0), offscreen: !hit };
+  const key = `${gun.x.toFixed(4)},${gun.y.toFixed(4)},${gun.buttons},${gun.offscreen}`;
+  if (key !== gunState.last) { gunState.last = key; worker.postMessage({ type: 'gun', gun }); }
+}
+
 renderer.setAnimationLoop(() => {
   if (worker) {
     const mask = readPad();
@@ -699,11 +789,12 @@ renderer.setAnimationLoop(() => {
   if (depthDirty && !renderer.xr.isPresenting) { depthDirty = false; saveView(); }
   if (!renderer.xr.isPresenting) { screen.rotation.x += (tiltX - screen.rotation.x) * 0.15; screen.rotation.y += (tiltY - screen.rotation.y) * 0.15; }
   else screen.rotation.set(0, 0, 0);
+  updateGun();
   renderer.render(scene, camera);
 });
 
 fitCamera();
 refreshLibrary();
-window.__snatcherVR = { showFrame, depthLib, view3d, applyView, localGen, overlayCells: () => overlayCells };
+window.__snatcherVR = { showFrame, depthLib, view3d, applyView, localGen, overlayCells: () => overlayCells, gunAim, screen, SCREEN_W, dioramaMat, THREE };
 if (crashedLastTime) status('The browser closed while making a 3D map last time, so making maps on the headset has been switched off. Scenes that already have maps still work.', 'error');
 if (!store.hasOPFS) status('This browser cannot keep files between visits, so you will need to pick them each time.', 'error');
