@@ -3,7 +3,13 @@ import * as store from './storage.js';
 import { SEGA } from './core.js';
 
 const $ = (id) => document.getElementById(id);
-const status = (msg, kind = '') => { const s = $('status'); s.textContent = msg; s.dataset.kind = kind; };
+const status = (msg, kind = '') => { const s = $('status'); s.textContent = msg; s.dataset.kind = kind; vrStatus(msg, kind); };
+let vrStatus = () => {};             // replaced once the 3D scene exists
+let libReady = false, copying = false, vrSupported = false;
+function updateButtons() {
+  $('play').disabled = !libReady || started || copying;
+  $('vr').disabled = !vrSupported || copying || (!libReady && !started);
+}
 
 /* ------------------------------------------------------------------ library */
 async function refreshLibrary() {
@@ -12,21 +18,24 @@ async function refreshLibrary() {
   $('biosState').dataset.ok = !!lib.bios;
   $('discState').textContent = lib.disc ? `${lib.disc.entry}${lib.disc.names.length > 1 ? ` + ${lib.disc.names.length - 1} track files` : ''}` : 'Not added yet';
   $('discState').dataset.ok = !!lib.disc;
-  $('play').disabled = !(lib.bios && lib.disc) || started;
+  libReady = !!(lib.bios && lib.disc);
+  updateButtons();
 }
 
 $('biosFile').addEventListener('change', async (e) => {
   const f = e.target.files[0]; if (!f) return;
+  copying = true; updateButtons();
   try { await store.saveBios(f); status('BIOS saved.', 'ok'); } catch (err) { status(err.message, 'error'); }
-  e.target.value = ''; refreshLibrary();
+  copying = false; e.target.value = ''; refreshLibrary();
 });
 $('discFiles').addEventListener('change', async (e) => {
   const files = [...e.target.files]; if (!files.length) return;
+  copying = true; updateButtons();
   try {
     await store.saveDisc(files, (p) => status(`Copying disc into the browser… ${Math.round(p * 100)}%`));
     status('Disc saved. You only have to do this once.', 'ok');
   } catch (err) { status(err.message, 'error'); }
-  e.target.value = ''; refreshLibrary();
+  copying = false; e.target.value = ''; refreshLibrary();
 });
 
 /* ------------------------------------------------------------------ renderer */
@@ -124,6 +133,29 @@ function applyView() {
 // faint floor grid so VR has a sense of space
 const grid = new THREE.GridHelper(20, 40, 0x2a2238, 0x16121f);
 scene.add(grid);
+
+// status line inside VR (errors and start-up progress; fades once the game runs)
+const vrCanvas = document.createElement('canvas'); vrCanvas.width = 1024; vrCanvas.height = 160;
+const vrTex = new THREE.CanvasTexture(vrCanvas); vrTex.colorSpace = THREE.SRGBColorSpace;
+const vrPanel = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.25), new THREE.MeshBasicMaterial({ map: vrTex, transparent: true, depthTest: false }));
+vrPanel.position.set(0, SCREEN_Y - SCREEN_W * 0.375 - 0.22, SCREEN_Z + 0.3);
+vrPanel.renderOrder = 100; vrPanel.visible = false;
+scene.add(vrPanel);
+let vrHideTimer = 0;
+vrStatus = (msg, kind) => {
+  const c = vrCanvas.getContext('2d');
+  c.clearRect(0, 0, 1024, 160);
+  c.fillStyle = 'rgba(13,11,20,0.88)'; c.fillRect(0, 0, 1024, 160);
+  c.fillStyle = kind === 'error' ? '#ff8a8a' : kind === 'ok' ? '#6fd3a0' : '#e8e2ef';
+  c.font = '500 34px "IBM Plex Mono", monospace'; c.textBaseline = 'top';
+  const words = msg.split(' '), lines = ['']; 
+  for (const w of words) { const t = (lines[lines.length - 1] + ' ' + w).trim(); if (c.measureText(t).width > 980) lines.push(w); else lines[lines.length - 1] = t; }
+  lines.slice(0, 3).forEach((l, i) => c.fillText(l, 22, 20 + i * 44));
+  vrTex.needsUpdate = true;
+  vrPanel.visible = !!msg;
+  clearTimeout(vrHideTimer);
+  if (kind === 'ok') vrHideTimer = setTimeout(() => { vrPanel.visible = false; }, 6000);
+};
 
 function fitCamera() {
   const r = view.getBoundingClientRect();
@@ -280,7 +312,7 @@ document.addEventListener('visibilitychange', () => {
 const vrBtn = $('vr');
 if (navigator.xr) {
   navigator.xr.isSessionSupported('immersive-vr').then((ok) => {
-    vrBtn.disabled = !ok; vrBtn.textContent = ok ? 'Enter VR' : 'VR not available on this device';
+    vrSupported = ok; vrBtn.textContent = ok ? 'Enter VR' : 'VR not available on this device'; updateButtons();
   });
 } else vrBtn.textContent = 'VR not available on this device';
 
