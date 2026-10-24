@@ -72,6 +72,13 @@ function toRGBA(f) {
   return out;
 }
 
+// layer tags, bottom-up to match the RGBA rows
+function flipRows(src, w, h) {
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) out.set(src.subarray(y * w, y * w + w), (h - 1 - y) * w);
+  return out;
+}
+
 let last = 0, debt = 0, lastFrameCount = 0, saveTimer = 0;
 function tick() {
   if (!running) return;
@@ -91,7 +98,8 @@ function tick() {
     lastFrameCount = fc;
     const f = core.frame();
     const rgba = toRGBA(f);
-    postMessage({ type: 'frame', w: f.w, h: f.h, rgba }, [rgba.buffer]);
+    const tags = flipRows(core.tags(), f.w, f.h);
+    postMessage({ type: 'frame', w: f.w, h: f.h, rgba, tags }, [rgba.buffer, tags.buffer]);
   }
   if (now - saveTimer > 5000) { saveTimer = now; persistSaves().catch(() => {}); }
   setTimeout(tick, 2);

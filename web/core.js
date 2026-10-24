@@ -36,6 +36,11 @@ export class Core {
     const w = this.x.g_fb_w(), h = this.x.g_fb_h();
     return { w, h, rgb565: new Uint16Array(this.mem, this.x.g_fb(), w * h).slice() };
   }
+  // per-pixel layer tags for the current frame (see core/patch_layers.py)
+  tags() {
+    const w = this.x.g_fb_w(), h = this.x.g_fb_h();
+    return new Uint8Array(this.mem, this.x.g_tags(), w * h).slice();
+  }
   // interleaved stereo int16 produced by the last run()
   audio() {
     const n = this.x.g_audio_frames();

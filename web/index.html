@@ -54,6 +54,11 @@ button:disabled{opacity:.45;cursor:not-allowed}
 table{border-collapse:collapse;width:100%;font-size:.75rem}
 td{padding:4px 0;border-top:1px solid var(--line);vertical-align:top}
 td:first-child{color:var(--muted);width:46%}
+.field{display:grid;grid-template-columns:7.5rem minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.field label{font-size:.8rem}
+select{font:inherit;font-size:.8rem;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:3px;padding:6px;grid-column:2/4}
+input[type=range]{accent-color:var(--accent);min-width:0}
+.val{font-size:.75rem;color:var(--muted);font-variant-numeric:tabular-nums;min-width:4ch;text-align:right}
 kbd{font:inherit;border:1px solid var(--line);border-radius:2px;padding:0 4px}
 body:not([data-running]) .when-running{display:none}
 @media (max-width:760px){
@@ -98,6 +103,23 @@ body:not([data-running]) .when-running{display:none}
       <p id="status" role="status"></p>
     </section>
     <section>
+      <h2>Depth</h2>
+      <div class="field">
+        <label for="viewMode">View</label>
+        <select id="viewMode">
+          <option value="flat">Flat screen</option>
+          <option value="depth">Layer depth</option>
+          <option value="layers">Show layers in colour</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="depthStrength">Depth amount</label>
+        <input id="depthStrength" type="range" min="0" max="1" step="0.01" value="0.3">
+        <span id="depthVal" class="val">30 cm</span>
+      </div>
+      <p class="hint">Each layer of the Sega's picture sits at its own distance: backgrounds at the back, sprites and text boxes in front. Drag the picture to tilt it; double-click to straighten.</p>
+    </section>
+    <section>
       <h2>Quest controls</h2>
       <table>
         <tr><td>Left stick</td><td>D-pad</td></tr>
@@ -105,6 +127,8 @@ body:not([data-running]) .when-running{display:none}
         <tr><td>A button</td><td>B</td></tr>
         <tr><td>B or X button</td><td>C</td></tr>
         <tr><td>Y button / right grip</td><td>Start</td></tr>
+        <tr><td>Left stick click</td><td>Change view</td></tr>
+        <tr><td>Right stick up/down</td><td>Depth amount</td></tr>
       </table>
       <p class="hint">Keyboard: arrows, <kbd>Z</kbd> <kbd>X</kbd> <kbd>C</kbd> for A B C, <kbd>Enter</kbd> for Start. Game saves are kept automatically.</p>
     </section>

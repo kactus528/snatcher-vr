@@ -13,6 +13,8 @@ sed -i "s/#define M68K_EMULATE_ADDRESS_ERROR  OPT_ON/#define M68K_EMULATE_ADDRES
 sed -i "s/#define M68K_EMULATE_ADDRESS_ERROR  OPT_ON/#define M68K_EMULATE_ADDRESS_ERROR  OPT_OFF/" "$G/core/m68k/m68kconf.h"
 # let the frontend flush Sega CD backup RAM (game saves) without unloading the game
 sed -i "s/^static void bram_save(void)/void bram_save(void)/" "$G/libretro/libretro.c"
+# per-pixel layer tags for the depth renderer
+python3 "$HERE/patch_layers.py" "$G"
 OUT="$ROOT/build-obj"; mkdir -p "$OUT"
 
 DIRS="core core/z80 core/m68k core/ntsc core/sound core/input_hw core/cd_hw core/cart_hw core/cart_hw/svp"

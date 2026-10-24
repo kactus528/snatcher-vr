@@ -41,15 +41,85 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x07060b);
 const camera = new THREE.PerspectiveCamera(50, 1, 0.05, 100);
 
-// The game screen. Later steps swap this flat plane for the depth diorama.
-const SCREEN_W = 2.4;
-let tex = new THREE.DataTexture(new Uint8Array([20, 18, 30, 255]), 1, 1);
-tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.LinearFilter; tex.colorSpace = THREE.SRGBColorSpace;
-const screenMat = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false });
-const screen = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), screenMat);
-screen.scale.set(SCREEN_W, SCREEN_W * 0.75, 1);
-screen.position.set(0, 1.5, -2.2);
+// The game screen, drawn as a stack of cut-out layers. Each pixel carries a
+// tag saying which VDP layer it came from (see core/patch_layers.py); every
+// layer group gets its own sheet at its own depth. The rearmost sheet draws
+// the whole picture, so moving your head never shows holes.
+const SCREEN_W = 2.4, SCREEN_Z = -2.2, SCREEN_Y = 1.5;
+
+// tag → group. Groups are drawn back to front.
+const GROUPS = [
+  { name: 'Plane B',          tags: [0, 1, 255], depth: 0.0,  tint: [0.30, 0.55, 1.00], full: true },
+  { name: 'Plane B (front)',  tags: [2],         depth: 0.15, tint: [0.35, 0.85, 1.00] },
+  { name: 'Plane A',          tags: [3],         depth: 0.35, tint: [0.40, 1.00, 0.50] },
+  { name: 'Plane A (front)',  tags: [4],         depth: 0.5,  tint: [0.85, 1.00, 0.35] },
+  { name: 'Sprites',          tags: [7],         depth: 0.62, tint: [1.00, 0.55, 0.30] },
+  { name: 'Window / text',    tags: [5, 6],      depth: 0.75, tint: [1.00, 0.85, 0.30] },
+  { name: 'Sprites (front)',  tags: [8],         depth: 0.88, tint: [1.00, 0.35, 0.55] },
+];
+
+const view3d = { mode: 'depth', strength: 0.3 }; // mode: flat | depth | layers
+try { Object.assign(view3d, JSON.parse(localStorage.getItem('snatcher-vr.view')) || {}); } catch {}
+const saveView = () => { try { localStorage.setItem('snatcher-vr.view', JSON.stringify(view3d)); } catch {} };
+
+function makeTex(data, w, h, format) {
+  const t = new THREE.DataTexture(data, w, h, format);
+  t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false;
+  t.needsUpdate = true;
+  return t;
+}
+let colorTex = makeTex(new Uint8Array([20, 18, 30, 255]), 1, 1, THREE.RGBAFormat);
+let tagTex = makeTex(new Uint8Array([0]), 1, 1, THREE.RedFormat);
+
+const screen = new THREE.Group();
+screen.position.set(0, SCREEN_Y, SCREEN_Z);
 scene.add(screen);
+const sheets = GROUPS.map((g, i) => {
+  const tagMask = new Float32Array(16); // which of tags 0..8 (and 255→slot 15) belong here
+  g.tags.forEach(t => { tagMask[t === 255 ? 15 : t] = 1; });
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      colorTex: { value: colorTex }, tagTex: { value: tagTex },
+      tagMask: { value: tagMask }, full: { value: g.full ? 1 : 0 },
+      tint: { value: new THREE.Vector3(...g.tint) }, showTint: { value: 0 },
+    },
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `
+      uniform sampler2D colorTex; uniform sampler2D tagTex;
+      uniform float tagMask[16]; uniform float full; uniform vec3 tint; uniform float showTint;
+      varying vec2 vUv;
+      float inGroup(float t){
+        float m = 0.0;
+        for (int i = 0; i < 16; i++) { float id = (i == 15) ? 255.0 : float(i); if (abs(t - id) < 0.5) m = tagMask[i]; }
+        return m;
+      }
+      void main(){
+        float t = floor(texture2D(tagTex, vUv).r * 255.0 + 0.5);
+        if (full < 0.5 && inGroup(t) < 0.5) discard;
+        vec4 c = texture2D(colorTex, vUv);
+        if (showTint > 0.5) c.rgb = mix(c.rgb, tint, (full > 0.5 && inGroup(t) < 0.5) ? 0.0 : 0.55);
+        gl_FragColor = c;   // emulator colours pass straight through
+      }`,
+    depthWrite: false,   // sheets stack by draw order, back to front
+  });
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
+  m.scale.set(SCREEN_W, SCREEN_W * 0.75, 1);
+  m.renderOrder = 1 + i;
+  screen.add(m);
+  return m;
+});
+
+function applyView() {
+  sheets.forEach((m, i) => {
+    const g = GROUPS[i];
+    m.visible = view3d.mode !== 'flat' || g.full;
+    m.position.z = view3d.mode === 'flat' ? 0 : g.depth * view3d.strength;
+    m.material.uniforms.showTint.value = view3d.mode === 'layers' ? 1 : 0;
+  });
+  $('viewMode').value = view3d.mode;
+  $('depthStrength').value = view3d.strength;
+  $('depthVal').textContent = Math.round(view3d.strength * 100) + ' cm';
+}
 
 // faint floor grid so VR has a sense of space
 const grid = new THREE.GridHelper(20, 40, 0x2a2238, 0x16121f);
@@ -59,27 +129,43 @@ function fitCamera() {
   const r = view.getBoundingClientRect();
   renderer.setSize(r.width, r.height, false);
   camera.aspect = r.width / r.height;
-  const h = screen.scale.y, w = screen.scale.x;
+  const h = SCREEN_W * 0.75, w = SCREEN_W;
   const fov = THREE.MathUtils.degToRad(camera.fov);
-  const dist = Math.max(h / (2 * Math.tan(fov / 2)), w / (2 * Math.tan(fov / 2) * camera.aspect)) * 1.06;
-  camera.position.set(0, 1.5, -2.2 + dist);
-  camera.lookAt(0, 1.5, -2.2);
+  const dist = Math.max(h / (2 * Math.tan(fov / 2)), w / (2 * Math.tan(fov / 2) * camera.aspect)) * 1.1;
+  camera.position.set(0, SCREEN_Y, SCREEN_Z + dist);
+  camera.lookAt(0, SCREEN_Y, SCREEN_Z);
   camera.updateProjectionMatrix();
 }
 new ResizeObserver(fitCamera).observe(view);
 
-function showFrame(w, h, rgba) {
-  if (tex.image.width !== w || tex.image.height !== h) {
-    tex.dispose();
-    tex = new THREE.DataTexture(rgba, w, h, THREE.RGBAFormat);
-    tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.LinearFilter;
-    tex.colorSpace = THREE.SRGBColorSpace;   // rows arrive bottom-up from the worker
-    screenMat.map = tex; screenMat.needsUpdate = true;
-    screen.scale.set(SCREEN_W, SCREEN_W * 0.75, 1); // shown at 4:3 whether the game runs 256 or 320 wide
-    fitCamera();
-  } else { tex.image.data = rgba; }
-  tex.needsUpdate = true;
+function showFrame(w, h, rgba, tags) {
+  if (colorTex.image.width !== w || colorTex.image.height !== h) {
+    colorTex.dispose(); tagTex.dispose();
+    colorTex = makeTex(rgba, w, h, THREE.RGBAFormat);   // rows arrive bottom-up from the worker
+    tagTex = makeTex(tags, w, h, THREE.RedFormat);
+    for (const m of sheets) { m.material.uniforms.colorTex.value = colorTex; m.material.uniforms.tagTex.value = tagTex; }
+  } else {
+    colorTex.image.data = rgba; colorTex.needsUpdate = true;
+    tagTex.image.data = tags; tagTex.needsUpdate = true;
+  }
 }
+
+// drag to tilt the screen on a flat display, so the depth is visible without a headset
+let drag = null, tiltX = 0, tiltY = 0;
+const cv = renderer.domElement;
+cv.style.touchAction = 'none';
+cv.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY, tx: tiltX, ty: tiltY }; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  tiltY = Math.max(-0.8, Math.min(0.8, drag.ty + (e.clientX - drag.x) * 0.005));
+  tiltX = Math.max(-0.5, Math.min(0.5, drag.tx + (e.clientY - drag.y) * 0.005));
+});
+cv.addEventListener('pointerup', () => { drag = null; });
+cv.addEventListener('dblclick', () => { tiltX = tiltY = 0; });
+
+$('viewMode').addEventListener('change', (e) => { view3d.mode = e.target.value; saveView(); applyView(); });
+$('depthStrength').addEventListener('input', (e) => { view3d.strength = +e.target.value; saveView(); applyView(); });
+applyView();
 
 /* ------------------------------------------------------------------ input */
 const keys = new Set();
@@ -95,6 +181,10 @@ function stickDirs(x, y, out) {
   if (x < -t) out.add('LEFT'); if (x > t) out.add('RIGHT');
 }
 
+let prevStickPress = false, depthDirty = false;
+const MODES = ['flat', 'depth', 'layers'];
+function cycleView() { view3d.mode = MODES[(MODES.indexOf(view3d.mode) + 1) % MODES.length]; saveView(); applyView(); }
+
 function readPad() {
   const held = new Set(keys);
   const session = renderer.xr.getSession();
@@ -108,7 +198,11 @@ function readPad() {
         if (b(4)) held.add('C');        // X
         if (b(5)) held.add('START');    // Y
         if (b(0)) held.add('A');        // left trigger
+        if (b(3) && !prevStickPress) cycleView();   // left stick click: flat → depth → layer colours
+        prevStickPress = b(3);
       } else {
+        const ry = gp.axes[3] || 0;               // right stick up/down: depth amount
+        if (Math.abs(ry) > 0.3) { view3d.strength = Math.max(0, Math.min(1, view3d.strength - ry * 0.008)); applyView(); depthDirty = true; }
         if (b(0)) held.add('A');        // right trigger
         if (b(4)) held.add('B');        // A
         if (b(5)) held.add('C');        // B
@@ -159,7 +253,7 @@ async function start() {
 
 function onWorker(e) {
   const m = e.data;
-  if (m.type === 'frame') showFrame(m.w, m.h, m.rgba);
+  if (m.type === 'frame') showFrame(m.w, m.h, m.rgba, m.tags);
   else if (m.type === 'started') { status('Running. Keyboard: arrows, Z/X/C, Enter. In VR, see the button guide.', 'ok'); document.body.dataset.running = '1'; }
   else if (m.type === 'error') { status(m.msg, 'error'); }
   else if (m.type === 'log') { console.log(m.msg); }
@@ -206,6 +300,9 @@ renderer.setAnimationLoop(() => {
     const mask = readPad();
     if (mask !== lastMask) { lastMask = mask; worker.postMessage({ type: 'pad', mask }); }
   }
+  if (depthDirty && !renderer.xr.isPresenting) { depthDirty = false; saveView(); }
+  if (!renderer.xr.isPresenting) { screen.rotation.x += (tiltX - screen.rotation.x) * 0.15; screen.rotation.y += (tiltY - screen.rotation.y) * 0.15; }
+  else screen.rotation.set(0, 0, 0);
   renderer.render(scene, camera);
 });
 

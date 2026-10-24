@@ -4,8 +4,9 @@ Play the Sega CD version of *Snatcher* inside a Meta Quest headset, running enti
 in the Quest browser. The long-term goal is a 3DS-style "diorama" look: each part of
 the picture pushed to its own depth.
 
-**Status: step 1 of 6** — the emulator runs in the browser and shows the game on a
-flat screen in VR. Depth comes next.
+**Status: step 2 of 6** — the emulator runs in the browser, and each pixel is tagged with
+the video-chip layer it came from (plane B, plane A, window, sprites), so the picture is
+shown as stacked cut-out layers at different depths. Scene depth maps come next.
 
 ## Playing
 
@@ -52,14 +53,14 @@ WASI_SDK=/path/to/wasi-sdk GPGX=/path/to/Genesis-Plus-GX ./core/build.sh
 node test/run_test.mjs   # boots a tiny generated test ROM (python3 test/make_rom.py)
 ```
 
-The build patches two things in the emulator source: 68000 address-error emulation is
+The build patches three things in the emulator source: 68000 address-error emulation is
 turned off (it needs `setjmp`, which WASI lacks), and `bram_save` is made public so the
 page can persist game saves without unloading the game.
 
 ## Roadmap
 
 1. ✅ Emulator in the browser, flat screen in VR
-2. Per-pixel layer tags from the video chip (plane A, plane B, window, sprites)
+2. ✅ Per-pixel layer tags from the video chip, shown as stacked depth layers
 3. Scene recognition by hashing plane B's tiles
 4. Depth-map diorama renderer combining layer depth + scene depth maps
 5. Capture mode and depth-map authoring pipeline

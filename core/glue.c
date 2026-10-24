@@ -14,12 +14,22 @@ static uint16_t fb[720 * 576];
 static unsigned fb_w, fb_h;
 static unsigned frames;
 
+/* per-pixel layer tags written by the patched renderer (see patch_layers.py),
+ * same geometry as the core's 720-wide bitmap */
+extern uint8_t layer_tags[];
+extern uint8_t *layer_bitmap_data(void);
+static uint8_t tags[720 * 576];
+
 static void video_cb(const void *data, unsigned w, unsigned h, size_t pitch)
 {
    if (!data) return; /* duped frame: keep previous */
    fb_w = w; fb_h = h;
+   size_t off = ((const uint8_t *)data - layer_bitmap_data()) / 2; /* pixel offset of the cropped view */
    for (unsigned y = 0; y < h; y++)
+   {
       memcpy(fb + y * w, (const uint8_t *)data + y * pitch, w * 2);
+      memcpy(tags + y * w, layer_tags + off + y * (pitch / 2), w);
+   }
    frames++;
 }
 
@@ -128,6 +138,7 @@ WASM_EXPORT(g_reset) void g_reset(void) { retro_reset(); }
 WASM_EXPORT(g_fb) uint16_t *g_fb(void) { return fb; }
 WASM_EXPORT(g_fb_w) unsigned g_fb_w(void) { return fb_w; }
 WASM_EXPORT(g_fb_h) unsigned g_fb_h(void) { return fb_h; }
+WASM_EXPORT(g_tags) uint8_t *g_tags(void) { return tags; }
 WASM_EXPORT(g_frames) unsigned g_frames(void) { return frames; }
 
 WASM_EXPORT(g_audio) int16_t *g_audio(void) { return audio; }
