@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Snatcher VR</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0d0b14">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<script type="importmap">
+{ "imports": { "three": "./lib/three.module.js" } }
+</script>
+<style>
+:root{
+  --bg:#0d0b14; --panel:#15121e; --line:#2c2638; --fg:#e8e2ef; --muted:#9a90a8;
+  --accent:#ff7a59; --accent-ink:#1a0e09; --ok:#6fd3a0; --err:#ff8a8a;
+  --display:"Chakra Petch","Segoe UI",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--mono);display:grid;grid-template-rows:auto 1fr;
+  padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;border-bottom:1px solid var(--line);
+  padding:12px max(16px,env(safe-area-inset-right,0px)) 12px max(16px,env(safe-area-inset-left,0px))}
+h1{font:700 1.2rem var(--display);letter-spacing:.08em;text-transform:uppercase;margin:0}
+h1 span{color:var(--accent)}
+.sub{color:var(--muted);font-size:.75rem;letter-spacing:.06em}
+main{display:grid;grid-template-columns:minmax(0,1fr) 340px;min-height:0}
+#view{position:relative;min-height:240px}
+#view canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+aside{border-left:1px solid var(--line);background:var(--panel);overflow-y:auto;display:flex;flex-direction:column;gap:22px;
+  padding:18px max(16px,env(safe-area-inset-right,0px)) 24px 18px}
+h2{font:500 .72rem var(--display);letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+.row{display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.row .label{font-size:.8rem}
+.row .state{grid-column:1;font-size:.72rem;color:var(--muted);overflow-wrap:anywhere}
+.row .state[data-ok="true"]{color:var(--ok)}
+.row .state[data-ok="true"]::before{content:"● "}
+.row .state[data-ok="false"]::before{content:"○ "}
+.file{grid-row:1/3;grid-column:2;position:relative}
+.file input{position:absolute;inset:0;opacity:0;cursor:pointer}
+button,.file span{font:500 .82rem var(--display);letter-spacing:.06em;border:1px solid var(--line);background:transparent;color:var(--fg);
+  padding:8px 12px;border-radius:3px;cursor:pointer;display:inline-block}
+.file:focus-within span,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button:disabled{opacity:.45;cursor:not-allowed}
+.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700;text-transform:uppercase}
+.actions{display:flex;flex-wrap:wrap;gap:8px}
+#status{font-size:.75rem;color:var(--muted);min-height:2.6em}
+#status[data-kind=ok]{color:var(--ok)} #status[data-kind=error]{color:var(--err)}
+.hint{font-size:.72rem;color:var(--muted);margin:8px 0 0}
+table{border-collapse:collapse;width:100%;font-size:.75rem}
+td{padding:4px 0;border-top:1px solid var(--line);vertical-align:top}
+td:first-child{color:var(--muted);width:46%}
+kbd{font:inherit;border:1px solid var(--line);border-radius:2px;padding:0 4px}
+body:not([data-running]) .when-running{display:none}
+@media (max-width:760px){
+  main{grid-template-columns:1fr;grid-template-rows:42vh auto}
+  aside{border-left:0;border-top:1px solid var(--line);padding-left:max(16px,env(safe-area-inset-left,0px))}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Snatcher <span>VR</span></h1>
+  <div class="sub">SEGA CD · GENESIS PLUS GX · WEBXR</div>
+</header>
+<main>
+  <div id="view"></div>
+  <aside>
+    <section>
+      <h2>Your files</h2>
+      <div class="row">
+        <div class="label">Sega CD BIOS</div>
+        <div class="state" id="biosState" data-ok="false">Not added yet</div>
+        <label class="file"><span>Choose</span><input id="biosFile" type="file" aria-label="Choose Sega CD BIOS"></label>
+      </div>
+      <div class="row">
+        <div class="label">Snatcher disc</div>
+        <div class="state" id="discState" data-ok="false">Not added yet</div>
+        <label class="file"><span>Choose</span><input id="discFiles" type="file" multiple aria-label="Choose disc image files"></label>
+      </div>
+      <p class="hint">Use a US BIOS (model 1 or 2) and a dump of your own disc: the .cue plus all its .bin tracks selected together, or one .chd. They're copied into this browser once and stay on the device.</p>
+    </section>
+    <section>
+      <h2>Play</h2>
+      <div class="actions">
+        <button id="play" class="primary" disabled>Start game</button>
+        <button id="vr" disabled>Checking VR…</button>
+      </div>
+      <div class="actions when-running" style="margin-top:8px">
+        <button id="saveState">Save state</button>
+        <button id="loadState">Load state</button>
+        <button id="reset">Reset</button>
+      </div>
+      <p id="status" role="status"></p>
+    </section>
+    <section>
+      <h2>Quest controls</h2>
+      <table>
+        <tr><td>Left stick</td><td>D-pad</td></tr>
+        <tr><td>Either trigger</td><td>A</td></tr>
+        <tr><td>A button</td><td>B</td></tr>
+        <tr><td>B or X button</td><td>C</td></tr>
+        <tr><td>Y button / right grip</td><td>Start</td></tr>
+      </table>
+      <p class="hint">Keyboard: arrows, <kbd>Z</kbd> <kbd>X</kbd> <kbd>C</kbd> for A B C, <kbd>Enter</kbd> for Start. Game saves are kept automatically.</p>
+    </section>
+  </aside>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

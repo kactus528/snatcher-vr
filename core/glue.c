@@ -154,6 +154,10 @@ WASM_EXPORT(g_state_size) size_t g_state_size(void) { return retro_serialize_siz
 WASM_EXPORT(g_state_save) int g_state_save(void *buf, size_t n) { return retro_serialize(buf, n); }
 WASM_EXPORT(g_state_load) int g_state_load(const void *buf, size_t n) { return retro_unserialize(buf, n); }
 
+/* write Sega CD backup RAM to /save so JS can persist it */
+extern void bram_save(void);
+WASM_EXPORT(g_flush_saves) void g_flush_saves(void) { bram_save(); }
+
 /* scratch memory for JS */
 #include <stdlib.h>
 WASM_EXPORT(g_malloc) void *g_malloc(size_t n) { return malloc(n); }

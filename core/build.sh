@@ -11,6 +11,8 @@ CC="$WASI_SDK/bin/clang --sysroot=$WASI_SDK/share/wasi-sysroot"
 sed -i "s/#define M68K_EMULATE_ADDRESS_ERROR  OPT_ON/#define M68K_EMULATE_ADDRESS_ERROR  OPT_OFF/" "$G/core/m68k/m68kconf.h"
 # no setjmp on WASI: turn off 68000 address-error emulation (only odd homebrew needs it)
 sed -i "s/#define M68K_EMULATE_ADDRESS_ERROR  OPT_ON/#define M68K_EMULATE_ADDRESS_ERROR  OPT_OFF/" "$G/core/m68k/m68kconf.h"
+# let the frontend flush Sega CD backup RAM (game saves) without unloading the game
+sed -i "s/^static void bram_save(void)/void bram_save(void)/" "$G/libretro/libretro.c"
 OUT="$ROOT/build-obj"; mkdir -p "$OUT"
 
 DIRS="core core/z80 core/m68k core/ntsc core/sound core/input_hw core/cd_hw core/cart_hw core/cart_hw/svp"
