@@ -23,9 +23,9 @@ Game saves (Sega CD backup RAM) are written automatically. Save states are on th
 | Quest | Sega |
 |---|---|
 | Left stick | D-pad |
-| Either trigger | A |
-| A | B |
-| B or X | C |
+| A or either trigger | Select / shoot (C) |
+| B | Cancel (B) |
+| X | Draw blaster (A) |
 | Y / right grip | Start |
 
 Keyboard: arrows, Z/X/C, Enter.
@@ -59,13 +59,23 @@ page can persist game saves without unloading the game, and `core/patch_layers.p
 per-pixel layer tags to the Mode 5 renderer (`node test/layers_test.mjs` checks them
 against the known layout built by `test/make_layers_rom.py`).
 
+## Depth maps
+
+`tools/make_depth.py` takes capture zips (from **Download all** on the page), finds the
+illustration in each scene, runs [Depth Anything V2](https://github.com/DepthAnything/Depth-Anything-V2)
+(small, ONNX build from [fabio-sim/Depth-Anything-ONNX](https://github.com/fabio-sim/Depth-Anything-ONNX))
+on it, and writes `web/depth/<id>.png` plus `web/depth/manifest.json`. In a map, 128 is the
+screen plane and brighter is closer. Maps can be repainted by hand in any image editor; the
+tool never overwrites a scene that's already in the manifest. Only maps and fingerprints are
+committed, never the captured artwork.
+
 ## Roadmap
 
 1. ✅ Emulator in the browser, flat screen in VR
 2. ✅ Per-pixel layer tags from the video chip, shown as stacked depth layers
 3. Scene capture ✅ (picture + layer map + fingerprint, downloadable as a zip); scene recognition from fingerprints next
-4. Depth-map diorama renderer combining layer depth + scene depth maps
-5. Capture mode and depth-map authoring pipeline
+4. ✅ Depth-map diorama: recognised scenes are bent into 3D by their depth map; others fall back to layer depth
+5. ✅ Depth-map pipeline: `tools/make_depth.py` turns capture zips into `web/depth/` maps (hand touch-ups welcome)
 6. Light-gun aiming with the controller, sharp text layer, polish
 
 Genesis Plus GX is licensed for non-commercial use; see its license. three.js (MIT) is

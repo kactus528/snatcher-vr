@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import * as store from './storage.js';
 import { SEGA } from './core.js';
-import { Captures } from './captures.js';
+import { Captures, fingerprint, distance } from './captures.js';
 
 const $ = (id) => document.getElementById(id);
 const status = (msg, kind = '') => { const s = $('status'); s.textContent = msg; s.dataset.kind = kind; vrStatus(msg, kind); };
@@ -124,10 +124,63 @@ const sheets = GROUPS.map((g, i) => {
   return m;
 });
 
+/* ---- scene depth maps (made by tools/make_depth.py from captures) ---- */
+// The picture is a grid of vertices pushed toward or away from you by the
+// matched scene's depth map. 128 in the map = the screen plane.
+const dioramaMat = new THREE.ShaderMaterial({
+  uniforms: { colorTex: { value: colorTex }, depthTex: { value: null }, amount: { value: 0 } },
+  vertexShader: `
+    uniform sampler2D depthTex; uniform float amount; varying vec2 vUv;
+    void main(){
+      vUv = uv;
+      float d = texture2D(depthTex, uv).r * 255.0 - 128.0;
+      vec3 p = position; p.z += d / 128.0 * amount;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+    }`,
+  fragmentShader: `uniform sampler2D colorTex; varying vec2 vUv; void main(){ gl_FragColor = texture2D(colorTex, vUv); }`,
+});
+const diorama = new THREE.Mesh(new THREE.PlaneGeometry(1, 1, 192, 168), dioramaMat);
+diorama.scale.set(SCREEN_W, SCREEN_W * 0.75, 1);
+diorama.visible = false;
+screen.add(diorama);
+
+const depthLib = { scenes: [], textures: new Map(), current: null, blend: 0 };
+fetch(new URL('./depth/manifest.json', import.meta.url)).then(r => r.ok ? r.json() : { scenes: [] })
+  .then(m => { depthLib.scenes = m.scenes.map(s => ({ ...s, fp: Uint8Array.from(s.fingerprint) })); })
+  .catch(() => {});
+
+function depthTexture(scene) {
+  let t = depthLib.textures.get(scene.id);
+  if (!t) {
+    t = new THREE.TextureLoader().load(new URL('./depth/' + scene.map, import.meta.url).href);
+    t.minFilter = t.magFilter = THREE.LinearFilter; t.generateMipmaps = false;
+    depthLib.textures.set(scene.id, t);
+  }
+  return t;
+}
+
+let fpCounter = 0;
+function recogniseScene(w, h, rgba) {
+  if (!depthLib.scenes.length || (fpCounter++ % 6)) return;
+  const fp = fingerprint(rgba, w, h);
+  let best = null, bestD = 0.2;
+  for (const s of depthLib.scenes) {
+    if (s.width !== w || s.height !== h) continue;
+    const d = distance(fp, s.fp); if (d < bestD) { bestD = d; best = s; }
+  }
+  if (best !== depthLib.current) {
+    depthLib.current = best;
+    if (best) { dioramaMat.uniforms.depthTex.value = depthTexture(best); dioramaMat.uniforms.amount.value = 0; }
+    applyView();
+  }
+}
+
 function applyView() {
+  const useMap = view3d.mode === 'depth' && !!depthLib.current;
+  diorama.visible = useMap;
   sheets.forEach((m, i) => {
     const g = GROUPS[i];
-    m.visible = view3d.mode !== 'flat' || g.full;
+    m.visible = !useMap && (view3d.mode !== 'flat' || g.full);
     m.position.z = view3d.mode === 'flat' ? 0 : g.depth * view3d.strength;
     m.material.uniforms.showTint.value = view3d.mode === 'layers' ? 1 : 0;
   });
@@ -182,10 +235,12 @@ function showFrame(w, h, rgba, tags) {
     colorTex = makeTex(rgba, w, h, THREE.RGBAFormat);   // rows arrive bottom-up from the worker
     tagTex = makeTex(tags, w, h, THREE.RedFormat);
     for (const m of sheets) { m.material.uniforms.colorTex.value = colorTex; m.material.uniforms.tagTex.value = tagTex; }
+    dioramaMat.uniforms.colorTex.value = colorTex;
   } else {
     colorTex.image.data = rgba; colorTex.needsUpdate = true;
     tagTex.image.data = tags; tagTex.needsUpdate = true;
   }
+  recogniseScene(w, h, rgba);
 }
 
 // drag to tilt the screen on a flat display, so the depth is visible without a headset
@@ -238,9 +293,10 @@ function readPad() {
       const b = (i) => gp.buttons[i] && gp.buttons[i].pressed;
       if (src.handedness === 'left') {
         stickDirs(gp.axes[2] || 0, gp.axes[3] || 0, held);
-        if (b(4)) held.add('C');        // X
+        // Snatcher: C = select / shoot, B = cancel, A = draw blaster
+        if (b(4)) held.add('A');        // X: draw blaster
         if (b(5)) held.add('START');    // Y
-        if (b(0)) held.add('A');        // left trigger
+        if (b(0)) held.add('C');        // left trigger: select / shoot
         if (b(3) && !prevStickPress) cycleView();   // left stick click: flat → depth → layer colours
         prevStickPress = b(3);
       } else {
@@ -248,9 +304,9 @@ function readPad() {
         prevRightPress = b(3);
         const ry = gp.axes[3] || 0;               // right stick up/down: depth amount
         if (Math.abs(ry) > 0.3) { view3d.strength = Math.max(0, Math.min(1, view3d.strength - ry * 0.008)); applyView(); depthDirty = true; }
-        if (b(0)) held.add('A');        // right trigger
-        if (b(4)) held.add('B');        // A
-        if (b(5)) held.add('C');        // B
+        if (b(0)) held.add('C');        // right trigger: select / shoot
+        if (b(4)) held.add('C');        // A: select
+        if (b(5)) held.add('B');        // B: cancel
         if (b(1)) held.add('START');    // right grip
       }
     }
@@ -384,6 +440,8 @@ renderer.setAnimationLoop(() => {
     const mask = readPad();
     if (mask !== lastMask) { lastMask = mask; worker.postMessage({ type: 'pad', mask }); }
   }
+  const target = diorama.visible ? view3d.strength * 0.6 : 0;
+  dioramaMat.uniforms.amount.value += (target - dioramaMat.uniforms.amount.value) * 0.12;
   if (depthDirty && !renderer.xr.isPresenting) { depthDirty = false; saveView(); }
   if (!renderer.xr.isPresenting) { screen.rotation.x += (tiltX - screen.rotation.x) * 0.15; screen.rotation.y += (tiltY - screen.rotation.y) * 0.15; }
   else screen.rotation.set(0, 0, 0);
@@ -392,4 +450,5 @@ renderer.setAnimationLoop(() => {
 
 fitCamera();
 refreshLibrary();
+window.__snatcherVR = { showFrame, depthLib, view3d, applyView };
 if (!store.hasOPFS) status('This browser cannot keep files between visits, so you will need to pick them each time.', 'error');
