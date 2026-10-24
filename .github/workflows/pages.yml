@@ -18,6 +18,12 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - name: Stamp build so browsers fetch fresh files
+        run: |
+          V=${GITHUB_SHA::7}
+          # append ?v=<commit> to every relative .js/.wasm/.json reference
+          sed -i -E "s#'(\./[A-Za-z0-9_/-]+\.(js|wasm|json))'#'\1?v=$V'#g" web/*.js
+          sed -i -E "s#src=\"app\.js\"#src=\"app.js?v=$V\"#; s#build dev#build $V#" web/index.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

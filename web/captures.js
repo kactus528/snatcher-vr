@@ -31,6 +31,19 @@ export function distance(a, b) {
   for (let g = 0; g < a.length; g++) if (Math.abs(a[g] - b[g]) > 16) diff++;
   return diff / a.length;
 }
+// Same, but only over the grid cells inside a picture box [x0,y0,x1,y1] (pixels,
+// top-down), so a changing text box or portrait under the picture doesn't matter.
+export function distanceIn(a, b, box, w, h) {
+  let diff = 0, n = 0;
+  for (let gy = 0; gy < GH; gy++) {
+    const cy = (gy + 0.5) * h / GH; if (cy < box[1] || cy > box[3]) continue;
+    for (let gx = 0; gx < GW; gx++) {
+      const cx = (gx + 0.5) * w / GW; if (cx < box[0] || cx > box[2]) continue;
+      n++; if (Math.abs(a[gy * GW + gx] - b[gy * GW + gx]) > 16) diff++;
+    }
+  }
+  return n ? diff / n : 1;
+}
 const SAME_SCENE = 0.2, STEADY = 0.02;
 
 const brightness = (fp) => fp.reduce((s, v) => s + v, 0) / fp.length;

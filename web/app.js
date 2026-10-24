@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import * as store from './storage.js';
 import { SEGA } from './core.js';
-import { Captures, fingerprint, distance } from './captures.js';
+import { Captures, fingerprint, distance, distanceIn } from './captures.js';
 
 const $ = (id) => document.getElementById(id);
 const status = (msg, kind = '') => { const s = $('status'); s.textContent = msg; s.dataset.kind = kind; vrStatus(msg, kind); };
@@ -159,19 +159,37 @@ function depthTexture(scene) {
   return t;
 }
 
+// small corner badge in VR: lit when the current scene has a 3D map
+const badgeCanvas = document.createElement('canvas'); badgeCanvas.width = 256; badgeCanvas.height = 48;
+const badgeTex = new THREE.CanvasTexture(badgeCanvas); badgeTex.colorSpace = THREE.SRGBColorSpace;
+const badge = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.06), new THREE.MeshBasicMaterial({ map: badgeTex, transparent: true }));
+badge.position.set(SCREEN_W / 2 - 0.16, SCREEN_W * 0.375 + 0.05, 0);
+screen.add(badge);
+function vrBadge(on) {
+  const c = badgeCanvas.getContext('2d'); c.clearRect(0, 0, 256, 48);
+  c.fillStyle = on ? 'rgba(111,211,160,0.9)' : 'rgba(80,72,96,0.7)'; c.fillRect(0, 0, 256, 48);
+  c.fillStyle = on ? '#0d1a12' : '#e8e2ef'; c.font = '600 26px "IBM Plex Mono", monospace'; c.textBaseline = 'middle';
+  c.fillText(on ? '3D MAP ON' : 'NO 3D MAP', 18, 25); badgeTex.needsUpdate = true;
+}
+vrBadge(false);
+
 let fpCounter = 0;
 function recogniseScene(w, h, rgba) {
   if (!depthLib.scenes.length || (fpCounter++ % 6)) return;
   const fp = fingerprint(rgba, w, h);
-  let best = null, bestD = 0.2;
+  let best = null, bestD = 0.15;
   for (const s of depthLib.scenes) {
     if (s.width !== w || s.height !== h) continue;
-    const d = distance(fp, s.fp); if (d < bestD) { bestD = d; best = s; }
+    const d = s.box ? distanceIn(fp, s.fp, s.box, w, h) : distance(fp, s.fp);
+    if (d < bestD) { bestD = d; best = s; }
   }
   if (best !== depthLib.current) {
     depthLib.current = best;
     if (best) { dioramaMat.uniforms.depthTex.value = depthTexture(best); dioramaMat.uniforms.amount.value = 0; }
     applyView();
+    $('mapState').textContent = best ? `3D map: on (${best.id})` : '3D map: none for this scene';
+    $('mapState').dataset.on = !!best;
+    if (renderer.xr.isPresenting) vrBadge(!!best);
   }
 }
 
@@ -440,7 +458,7 @@ renderer.setAnimationLoop(() => {
     const mask = readPad();
     if (mask !== lastMask) { lastMask = mask; worker.postMessage({ type: 'pad', mask }); }
   }
-  const target = diorama.visible ? view3d.strength * 0.6 : 0;
+  const target = diorama.visible ? view3d.strength : 0;
   dioramaMat.uniforms.amount.value += (target - dioramaMat.uniforms.amount.value) * 0.12;
   if (depthDirty && !renderer.xr.isPresenting) { depthDirty = false; saveView(); }
   if (!renderer.xr.isPresenting) { screen.rotation.x += (tiltX - screen.rotation.x) * 0.15; screen.rotation.y += (tiltY - screen.rotation.y) * 0.15; }
