@@ -51,6 +51,7 @@ static void audio_cb(int16_t l, int16_t r) { int16_t s[2] = {l, r}; audio_batch_
 static uint16_t pad_mask[2];
 static int16_t gun_x, gun_y; /* libretro screen coords, -0x7fff..0x7fff */
 static uint8_t gun_buttons, gun_offscreen;
+static unsigned gun_queries;   /* how often the core has read the light gun (diagnostics) */
 
 static void poll_cb(void) {}
 static int16_t input_cb(unsigned port, unsigned device, unsigned index, unsigned id)
@@ -62,6 +63,7 @@ static int16_t input_cb(unsigned port, unsigned device, unsigned index, unsigned
       if (id == RETRO_DEVICE_ID_JOYPAD_MASK) return pad_mask[port];
       return (pad_mask[port] >> id) & 1;
    case RETRO_DEVICE_LIGHTGUN:
+      gun_queries++;
       switch (id)
       {
       case RETRO_DEVICE_ID_LIGHTGUN_SCREEN_X: return gun_x;
@@ -101,7 +103,13 @@ static bool env_cb(unsigned cmd, void *data)
    case RETRO_ENVIRONMENT_GET_CAN_DUPE:
       *(bool *)data = true; return true;
    case RETRO_ENVIRONMENT_GET_VARIABLE:
-      ((struct retro_variable *)data)->value = NULL; return false;
+   {
+      struct retro_variable *v = (struct retro_variable *)data;
+      v->value = NULL;
+      /* the core treats guns as a touchscreen unless told otherwise */
+      if (v->key && !strcmp(v->key, "genesis_plus_gx_gun_input")) { v->value = "lightgun"; return true; }
+      return false;
+   }
    default:
       return false;
    }
@@ -138,6 +146,7 @@ WASM_EXPORT(g_reset) void g_reset(void) { retro_reset(); }
 WASM_EXPORT(g_fb) uint16_t *g_fb(void) { return fb; }
 WASM_EXPORT(g_fb_w) unsigned g_fb_w(void) { return fb_w; }
 WASM_EXPORT(g_fb_h) unsigned g_fb_h(void) { return fb_h; }
+WASM_EXPORT(g_gun_queries) unsigned g_gun_queries(void) { return gun_queries; }
 WASM_EXPORT(g_tags) uint8_t *g_tags(void) { return tags; }
 WASM_EXPORT(g_frames) unsigned g_frames(void) { return frames; }
 
