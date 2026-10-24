@@ -110,7 +110,7 @@ body:not([data-running]) .when-running{display:none}
         <label for="viewMode">View</label>
         <select id="viewMode">
           <option value="flat">Flat screen</option>
-          <option value="depth">Layer depth</option>
+          <option value="depth">3D</option>
           <option value="layers">Show layers in colour</option>
         </select>
       </div>
@@ -118,6 +118,10 @@ body:not([data-running]) .when-running{display:none}
         <label for="depthStrength">Depth amount</label>
         <input id="depthStrength" type="range" min="0" max="1" step="0.01" value="0.3">
         <span id="depthVal" class="val">30 cm</span>
+      </div>
+      <div class="field">
+        <input id="cutouts" type="checkbox">
+        <label for="cutouts" style="grid-column:2/4">Layer cut-outs in scenes without a 3D map</label>
       </div>
       <div class="field">
         <input id="localMaps" type="checkbox">

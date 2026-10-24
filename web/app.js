@@ -69,7 +69,7 @@ const GROUPS = [
   { name: 'Sprites (front)',  tags: [8],         depth: 0.88, tint: [1.00, 0.35, 0.55] },
 ];
 
-const view3d = { mode: 'depth', strength: 0.3 }; // mode: flat | depth | layers
+const view3d = { mode: 'depth', strength: 0.3, cutouts: false }; // mode: flat | depth | layers
 try { Object.assign(view3d, JSON.parse(localStorage.getItem('snatcher-vr.view')) || {}); } catch {}
 const saveView = () => { try { localStorage.setItem('snatcher-vr.view', JSON.stringify(view3d)); } catch {} };
 
@@ -313,11 +313,14 @@ function applyView() {
   diorama.visible = useMap;
   sheets.forEach((m, i) => {
     const g = GROUPS[i];
-    m.visible = !useMap && (view3d.mode !== 'flat' || g.full);
-    m.position.z = view3d.mode === 'flat' ? 0 : g.depth * view3d.strength;
+    // no map: flat unless the layer cut-outs are switched on (or the colour view is showing)
+    const cutouts = view3d.mode === 'layers' || (view3d.mode === 'depth' && view3d.cutouts);
+    m.visible = !useMap && (cutouts || g.full);
+    m.position.z = cutouts ? g.depth * view3d.strength : 0;
     m.material.uniforms.showTint.value = view3d.mode === 'layers' ? 1 : 0;
   });
   $('viewMode').value = view3d.mode;
+  $('cutouts').checked = !!view3d.cutouts;
   $('depthStrength').value = view3d.strength;
   $('depthVal').textContent = Math.round(view3d.strength * 100) + ' cm';
 }
@@ -390,6 +393,7 @@ cv.addEventListener('pointerup', () => { drag = null; });
 cv.addEventListener('dblclick', () => { tiltX = tiltY = 0; });
 
 $('viewMode').addEventListener('change', (e) => { view3d.mode = e.target.value; saveView(); applyView(); status(MODE_NAMES[view3d.mode], 'ok'); });
+$('cutouts').addEventListener('change', (e) => { view3d.cutouts = e.target.checked; saveView(); applyView(); });
 $('depthStrength').addEventListener('input', (e) => { view3d.strength = +e.target.value; saveView(); applyView(); });
 applyView();
 
@@ -409,7 +413,7 @@ function stickDirs(x, y, out) {
 
 let prevStickPress = false, prevRightPress = false, depthDirty = false;
 const MODES = ['flat', 'depth', 'layers'];
-const MODE_NAMES = { flat: 'View: flat screen', depth: 'View: layer depth',
+const MODE_NAMES = { flat: 'View: flat screen', depth: 'View: 3D',
   layers: 'View: layer colours. Blue = plane B, green = plane A, yellow = window/text, orange/pink = sprites, purple = backdrop, grey = unknown' };
 function cycleView() {
   view3d.mode = MODES[(MODES.indexOf(view3d.mode) + 1) % MODES.length]; saveView(); applyView();
