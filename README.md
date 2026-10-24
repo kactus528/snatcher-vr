@@ -54,8 +54,10 @@ node test/run_test.mjs   # boots a tiny generated test ROM (python3 test/make_ro
 ```
 
 The build patches three things in the emulator source: 68000 address-error emulation is
-turned off (it needs `setjmp`, which WASI lacks), and `bram_save` is made public so the
-page can persist game saves without unloading the game.
+turned off (it needs `setjmp`, which WASI lacks), `bram_save` is made public so the
+page can persist game saves without unloading the game, and `core/patch_layers.py` adds
+per-pixel layer tags to the Mode 5 renderer (`node test/layers_test.mjs` checks them
+against the known layout built by `test/make_layers_rom.py`).
 
 ## Roadmap
 
