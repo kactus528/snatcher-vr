@@ -3,7 +3,7 @@
 // The captures are the raw material for depth maps; the fingerprints are how
 // the game will recognise a scene later and load its map.
 
-const GW = 32, GH = 24;              // fingerprint grid
+export const GW = 32, GH = 24;       // fingerprint grid
 const LAYER_RGB = {                  // same colours as the in-game layer view
   0: [115, 51, 153], 1: [77, 140, 255], 2: [90, 217, 255], 3: [102, 255, 128], 4: [217, 255, 90],
   5: [255, 217, 77], 6: [255, 217, 77], 7: [255, 140, 77], 8: [255, 90, 140], 255: [140, 140, 140],
@@ -33,12 +33,13 @@ export function distance(a, b) {
 }
 // Same, but only over the grid cells inside a picture box [x0,y0,x1,y1] (pixels,
 // top-down), so a changing text box or portrait under the picture doesn't matter.
-export function distanceIn(a, b, box, w, h) {
+export function distanceIn(a, b, box, w, h, skip = null) {
   let diff = 0, n = 0;
   for (let gy = 0; gy < GH; gy++) {
     const cy = (gy + 0.5) * h / GH; if (cy < box[1] || cy > box[3]) continue;
     for (let gx = 0; gx < GW; gx++) {
       const cx = (gx + 0.5) * w / GW; if (cx < box[0] || cx > box[2]) continue;
+      if (skip && skip[gy * GW + gx]) continue;          // covered by a panel the game drew on top
       n++; if (Math.abs(a[gy * GW + gx] - b[gy * GW + gx]) > 16) diff++;
     }
   }

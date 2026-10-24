@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import * as store from './storage.js';
 import { SEGA } from './core.js';
-import { Captures, fingerprint, distance, distanceIn } from './captures.js';
+import { Captures, fingerprint, distance, distanceIn, GW, GH } from './captures.js';
 import { SIZE, topDown, pictureBox, modelInput, depthMap, mapToPNG } from './depthgen.js';
 
 const $ = (id) => document.getElementById(id);
@@ -142,9 +142,63 @@ const sheets = GROUPS.map((g, i) => {
 /* ---- scene depth maps (made by tools/make_depth.py from captures) ---- */
 // The picture is a grid of vertices pushed toward or away from you by the
 // matched scene's depth map. 128 in the map = the screen plane.
+/* ---- overlay panels ----
+   Item boxes, portraits and menus are drawn by the game as rectangles of sprites
+   on top of the illustration. Find them from the layer tags each frame so the
+   3D picture can leave them out and show them on a flat card floating in front. */
+let overlayTex = makeTex(new Uint8Array([0]), 1, 1, THREE.RedFormat);
+const overlayUniform = { value: overlayTex };
+let overlayCount = 0;
+
+function findOverlays(tags, w, h) {
+  const mask = new Uint8Array(w * h), seen = new Uint8Array(w * h), stack = [];
+  let panels = 0;
+  for (let s = 0; s < tags.length; s++) {
+    const t = tags[s];
+    if (seen[s] || !(t === 7 || t === 8 || t === 5 || t === 6)) continue;
+    const isWindow = t === 5 || t === 6;
+    let n = 0, x0 = w, y0 = h, x1 = 0, y1 = 0;
+    stack.push(s); seen[s] = 1;
+    while (stack.length) {
+      const p = stack.pop(), x = p % w, y = (p / w) | 0; n++;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      for (const q of [x > 0 ? p - 1 : -1, x < w - 1 ? p + 1 : -1, p - w, p + w]) {
+        if (q < 0 || q >= tags.length || seen[q]) continue;
+        const u = tags[q];
+        // same layer and same priority only, so a panel touching a character stays separate
+        if (isWindow ? (u === 5 || u === 6) : u === t) { seen[q] = 1; stack.push(q); }
+      }
+    }
+    const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+    // a panel: a big, nearly solid rectangle (characters are irregular shapes)
+    if (isWindow || (n >= 300 && bw >= 16 && bh >= 16 && n / (bw * bh) >= 0.8)) {
+      panels++;
+      for (let y = y0; y <= y1; y++) mask.fill(255, y * w + x0, y * w + x1 + 1);
+    }
+  }
+  return { mask, panels };
+}
+
+let overlayCells = null;     // fingerprint cells covered by panels (top-down), ignored when matching scenes
+function updateOverlays(tags, w, h) {
+  const { mask, panels } = findOverlays(tags, w, h);
+  overlayCount = panels;
+  overlayCells = null;
+  if (panels) {
+    overlayCells = new Uint8Array(GW * GH);
+    for (let y = 0; y < h; y++) {                  // mask rows are bottom-up
+      const gy = Math.min(GH - 1, ((h - 1 - y) * GH / h) | 0);
+      for (let x = 0; x < w; x++) if (mask[y * w + x]) overlayCells[gy * GW + Math.min(GW - 1, (x * GW / w) | 0)] = 1;
+    }
+  }
+  if (overlayTex.image.width !== w || overlayTex.image.height !== h) {
+    overlayTex.dispose(); overlayTex = makeTex(mask, w, h, THREE.RedFormat); overlayUniform.value = overlayTex;
+  } else { overlayTex.image.data = mask; overlayTex.needsUpdate = true; }
+}
+
 const dioramaMat = new THREE.ShaderMaterial({
   uniforms: { colorTex: { value: colorTex }, depthTex: { value: null }, amount: { value: 0 },
-    texSize: smoothUniforms.texSize, smoothMode: smoothUniforms.smoothMode },
+    overlayTex: overlayUniform, texSize: smoothUniforms.texSize, smoothMode: smoothUniforms.smoothMode },
   vertexShader: `
     uniform sampler2D depthTex; uniform float amount; varying vec2 vUv;
     void main(){
@@ -164,12 +218,26 @@ const dioramaMat = new THREE.ShaderMaterial({
         f = clamp((f - 0.5) / fw + 0.5, 0.0, 1.0);
         return texture2D(tex, (i + f + 0.5) / texSize);
       }
-    void main(){ gl_FragColor = sampleColor(colorTex, vUv); }`,
+    uniform sampler2D overlayTex;
+    void main(){
+      if (texture2D(overlayTex, vUv).r > 0.5) discard;   // panels are drawn on their own card
+      gl_FragColor = sampleColor(colorTex, vUv);
+    }`,
 });
 const diorama = new THREE.Mesh(new THREE.PlaneGeometry(1, 1, 192, 168), dioramaMat);
 diorama.scale.set(SCREEN_W, SCREEN_W * 0.75, 1);
 diorama.visible = false;
 screen.add(diorama);
+
+const cardMat = new THREE.ShaderMaterial({
+  uniforms: { colorTex: dioramaMat.uniforms.colorTex, overlayTex: overlayUniform,
+    texSize: smoothUniforms.texSize, smoothMode: smoothUniforms.smoothMode },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: dioramaMat.fragmentShader.replace('> 0.5) discard;', '< 0.5) discard;'),
+});
+const card = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), cardMat);
+card.scale.copy(diorama.scale); card.visible = false; card.renderOrder = 50;
+screen.add(card);
 
 const depthLib = { scenes: [], textures: new Map(), current: null };
 fetch(new URL('./depth/manifest.json', import.meta.url)).then(r => r.ok ? r.json() : { scenes: [] })
@@ -309,7 +377,7 @@ function recogniseScene(w, h, rgba) {
   let best = null, bestD = 0.15;
   for (const s of depthLib.scenes) {
     if (s.width !== w || s.height !== h) continue;
-    const d = s.box ? distanceIn(fp, s.fp, s.box, w, h) : distance(fp, s.fp);
+    const d = s.box ? distanceIn(fp, s.fp, s.box, w, h, overlayCells) : distance(fp, s.fp);
     if (d < bestD) { bestD = d; best = s; }
   }
   if (best !== depthLib.current) {
@@ -337,6 +405,8 @@ $('localMaps').addEventListener('change', (e) => {
 function applyView() {
   const useMap = view3d.mode === 'depth' && !!depthLib.current;
   diorama.visible = useMap;
+  card.visible = useMap;
+  card.position.z = view3d.strength * 0.55;     // floats a little in front of the picture
   sheets.forEach((m, i) => {
     const g = GROUPS[i];
     // no map: flat unless the layer cut-outs are switched on (or the colour view is showing)
@@ -409,6 +479,7 @@ function showFrame(w, h, rgba, tags, display = null, cw = w, ch = h) {
     tagTex = makeTex(tags, w, h, THREE.RedFormat);
     for (const m of sheets) m.material.uniforms.tagTex.value = tagTex;
   } else { tagTex.image.data = tags; tagTex.needsUpdate = true; }
+  if (view3d.mode === 'depth') updateOverlays(tags, w, h);
   recogniseScene(w, h, rgba);                      // always on the original pixels
 }
 
@@ -624,6 +695,6 @@ renderer.setAnimationLoop(() => {
 
 fitCamera();
 refreshLibrary();
-window.__snatcherVR = { showFrame, depthLib, view3d, applyView, localGen };
+window.__snatcherVR = { showFrame, depthLib, view3d, applyView, localGen, overlayCells: () => overlayCells };
 if (crashedLastTime) status('The browser closed while making a 3D map last time, so making maps on the headset has been switched off. Scenes that already have maps still work.', 'error');
 if (!store.hasOPFS) status('This browser cannot keep files between visits, so you will need to pick them each time.', 'error');
