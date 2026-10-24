@@ -1,0 +1,3 @@
+build-obj/
+test/*.bin
+node_modules/

@@ -1,0 +1,12 @@
+import { readFileSync } from 'fs';
+import { Core } from '../web/core.js';
+const core = await Core.create(readFileSync(new URL('../web/core.wasm', import.meta.url)), { log: () => {} });
+core.vfs.addBytes('/red.bin', new Uint8Array(readFileSync(new URL('./red.bin', import.meta.url))));
+core.load('/red.bin');
+for (let i = 0; i < 30; i++) core.run();
+const f = core.frame(), a = core.audio();
+const px = f.rgb565[(f.h >> 1) * f.w + (f.w >> 1)];
+console.log(`frame ${f.w}x${f.h}  centre pixel 0x${px.toString(16)} (r=${px >> 11})  audio frames/run ${a.length / 2}  ${core.fps.toFixed(2)}fps ${core.sampleRate}Hz`);
+const t = performance.now(); for (let i = 0; i < 600; i++) core.run();
+console.log(`600 frames in ${(performance.now() - t).toFixed(0)} ms`);
+const st = core.saveState(); console.log('save state bytes', st.length, 'reload ok', core.loadState(st));
