@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import * as store from './storage.js';
 import { SEGA } from './core.js';
 import { Captures, fingerprint, distance, distanceIn } from './captures.js';
+import { SIZE, topDown, pictureBox, modelInput, depthMap, mapToPNG } from './depthgen.js';
 
 const $ = (id) => document.getElementById(id);
 const status = (msg, kind = '') => { const s = $('status'); s.textContent = msg; s.dataset.kind = kind; vrStatus(msg, kind); };
@@ -144,9 +145,9 @@ diorama.scale.set(SCREEN_W, SCREEN_W * 0.75, 1);
 diorama.visible = false;
 screen.add(diorama);
 
-const depthLib = { scenes: [], textures: new Map(), current: null, blend: 0 };
+const depthLib = { scenes: [], textures: new Map(), current: null };
 fetch(new URL('./depth/manifest.json', import.meta.url)).then(r => r.ok ? r.json() : { scenes: [] })
-  .then(m => { depthLib.scenes = m.scenes.map(s => ({ ...s, fp: Uint8Array.from(s.fingerprint) })); })
+  .then(m => { depthLib.scenes.push(...m.scenes.map(s => ({ ...s, fp: Uint8Array.from(s.fingerprint) }))); })
   .catch(() => {});
 
 function depthTexture(scene) {
@@ -159,23 +160,114 @@ function depthTexture(scene) {
   return t;
 }
 
-// small corner badge in VR: lit when the current scene has a 3D map
-const badgeCanvas = document.createElement('canvas'); badgeCanvas.width = 256; badgeCanvas.height = 48;
+// small corner badge above the screen: whether the current scene is in 3D
+const badgeCanvas = document.createElement('canvas'); badgeCanvas.width = 320; badgeCanvas.height = 48;
 const badgeTex = new THREE.CanvasTexture(badgeCanvas); badgeTex.colorSpace = THREE.SRGBColorSpace;
-const badge = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.06), new THREE.MeshBasicMaterial({ map: badgeTex, transparent: true }));
-badge.position.set(SCREEN_W / 2 - 0.16, SCREEN_W * 0.375 + 0.05, 0);
+const badge = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.06), new THREE.MeshBasicMaterial({ map: badgeTex, transparent: true }));
+badge.position.set(SCREEN_W / 2 - 0.2, SCREEN_W * 0.375 + 0.05, 0);
 screen.add(badge);
-function vrBadge(on) {
-  const c = badgeCanvas.getContext('2d'); c.clearRect(0, 0, 256, 48);
-  c.fillStyle = on ? 'rgba(111,211,160,0.9)' : 'rgba(80,72,96,0.7)'; c.fillRect(0, 0, 256, 48);
-  c.fillStyle = on ? '#0d1a12' : '#e8e2ef'; c.font = '600 26px "IBM Plex Mono", monospace'; c.textBaseline = 'middle';
-  c.fillText(on ? '3D MAP ON' : 'NO 3D MAP', 18, 25); badgeTex.needsUpdate = true;
+function setBadge(state, text) {   // state: on | off | busy
+  const c = badgeCanvas.getContext('2d'); c.clearRect(0, 0, 320, 48);
+  c.fillStyle = state === 'on' ? 'rgba(111,211,160,0.92)' : state === 'busy' ? 'rgba(255,190,90,0.92)' : 'rgba(80,72,96,0.75)';
+  c.fillRect(0, 0, 320, 48);
+  c.fillStyle = state === 'off' ? '#e8e2ef' : '#16100a'; c.font = '600 24px "IBM Plex Mono", monospace'; c.textBaseline = 'middle';
+  c.fillText(text, 16, 25); badgeTex.needsUpdate = true;
+  $('mapState').textContent = { on: '3D map: on for this scene', busy: 'Making a 3D map for this scene…', off: '3D map: none for this scene' }[state];
+  $('mapState').dataset.on = state === 'on';
 }
-vrBadge(false);
+setBadge('off', 'NO 3D MAP');
 
-let fpCounter = 0;
+/* ---- making maps on the headset for scenes that don't have one ---- */
+const localGen = { enabled: true, worker: null, busy: null, working: false, ready: false, skip: [], loadingShown: false };
+try { localGen.enabled = localStorage.getItem('snatcher-vr.localmaps') !== '0'; } catch {}
+
+async function mapsDir() { return (await navigator.storage.getDirectory()).getDirectoryHandle('depthmaps', { create: true }); }
+
+async function addLocalScene(meta, pngBlob) {
+  const bmp = await createImageBitmap(pngBlob, { imageOrientation: 'flipY' });
+  const t = new THREE.Texture(bmp); t.flipY = false;
+  t.minFilter = t.magFilter = THREE.LinearFilter; t.generateMipmaps = false; t.needsUpdate = true;
+  depthLib.textures.set(meta.id, t);
+  depthLib.scenes.push({ ...meta, fp: Uint8Array.from(meta.fingerprint) });
+}
+
+// maps made on this headset in earlier sessions
+(async () => {
+  try {
+    const dir = await mapsDir();
+    const man = JSON.parse(await (await (await dir.getFileHandle('manifest.json')).getFile()).text());
+    for (const meta of man.scenes) {
+      const png = await (await dir.getFileHandle(meta.map)).getFile();
+      await addLocalScene(meta, png);
+    }
+  } catch {}
+})();
+
+function depthWorker() {
+  if (localGen.worker) return localGen.worker;
+  const w = new Worker(new URL('./depth-worker.js', import.meta.url));
+  w.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === 'progress' && m.fraction < 1) {
+      status(`Downloading the 3D depth model (one time only)… ${Math.round(m.fraction * 100)}%`);
+      localGen.loadingShown = true;
+    } else if (m.type === 'ready') {
+      localGen.ready = true;
+      if (localGen.loadingShown) status(`3D depth model ready (${m.backend === 'webgpu' ? 'GPU' : 'CPU'}).`, 'ok');
+    } else if (m.type === 'result' || m.type === 'error') {
+      const job = localGen.busy; localGen.busy = null;
+      if (job) job[m.type === 'result' ? 'resolve' : 'reject'](m);
+    }
+  };
+  w.onerror = (e) => { const job = localGen.busy; localGen.busy = null; if (job) job.reject({ msg: e.message || 'worker failed' }); };
+  localGen.worker = w;
+  return w;
+}
+
+async function makeLocalMap(w, h, rgba, fp) {
+  localGen.working = true;
+  try { await makeLocalMapInner(w, h, rgba, fp); } finally { localGen.working = false; }
+}
+async function makeLocalMapInner(w, h, rgba, fp) {
+  const top = topDown(rgba, w, h);
+  const box = pictureBox(top, w, h);
+  if (!box) { localGen.skip.push({ w, h, fp }); return; }       // text screen or menu: nothing to sculpt
+  const input = modelInput(top, w, h, box);
+  setBadge('busy', 'MAKING 3D…');
+  const t0 = performance.now();
+  let res;
+  try {
+    res = await new Promise((resolve, reject) => {
+      // first run includes the one-time model download, so allow plenty of time
+      const limit = setTimeout(() => { localGen.busy = null; reject({ msg: 'the depth model took too long' }); }, localGen.ready ? 120000 : 600000);
+      localGen.busy = { resolve: (v) => { clearTimeout(limit); resolve(v); }, reject: (v) => { clearTimeout(limit); reject(v); } };
+      depthWorker().postMessage({ type: 'infer', id: Date.now(), input, size: SIZE }, [input.buffer]);
+    });
+  } catch (err) {
+    localGen.skip.push({ w, h, fp });
+    status('Could not make a 3D map: ' + (err.msg || err.message), 'error');
+    setBadge('off', 'NO 3D MAP');
+    return;
+  }
+  const map = depthMap(res.output, w, h, box);
+  const id = 'q' + Date.now().toString(36);
+  const meta = { id, width: w, height: h, grid: [32, 24], fingerprint: [...fp], map: id + '.png', box, madeOn: 'headset' };
+  const png = await mapToPNG(map, w, h);
+  await addLocalScene(meta, png);
+  try {
+    const dir = await mapsDir();
+    const wr = await (await dir.getFileHandle(meta.map, { create: true })).createWritable(); await wr.write(png); await wr.close();
+    const all = depthLib.scenes.filter(s => s.madeOn === 'headset').map(({ fp, ...rest }) => rest);
+    const mw = await (await dir.getFileHandle('manifest.json', { create: true })).createWritable();
+    await mw.write(JSON.stringify({ version: 1, scenes: all })); await mw.close();
+  } catch {}
+  console.log(`depth map ${id} in ${Math.round(performance.now() - t0)} ms (${res.backend}, model ${res.ms} ms)`);
+  depthLib.current = undefined;                 // force re-recognition on the next frame
+}
+
+let fpCounter = 0, recent = [];
 function recogniseScene(w, h, rgba) {
-  if (!depthLib.scenes.length || (fpCounter++ % 6)) return;
+  if ((fpCounter++ % 6)) return;
   const fp = fingerprint(rgba, w, h);
   let best = null, bestD = 0.15;
   for (const s of depthLib.scenes) {
@@ -187,11 +279,23 @@ function recogniseScene(w, h, rgba) {
     depthLib.current = best;
     if (best) { dioramaMat.uniforms.depthTex.value = depthTexture(best); dioramaMat.uniforms.amount.value = 0; }
     applyView();
-    $('mapState').textContent = best ? `3D map: on (${best.id})` : '3D map: none for this scene';
-    $('mapState').dataset.on = !!best;
-    if (renderer.xr.isPresenting) vrBadge(!!best);
+    if (!localGen.working) setBadge(best ? 'on' : 'off', best ? '3D MAP ON' : 'NO 3D MAP');
   }
+
+  // no map: once the picture has held still ~0.6 s, make one on the headset
+  recent.push(fp); if (recent.length > 6) recent.shift();
+  if (best || !localGen.enabled || localGen.working || view3d.mode !== 'depth' || recent.length < 6) return;
+  for (let i = 1; i < recent.length; i++) if (distance(recent[i - 1], recent[i]) > 0.02) return;
+  if (fp.reduce((a, v) => a + v, 0) / fp.length < 12) return;                       // dark screen
+  if (localGen.skip.some(k => k.w === w && k.h === h && distance(k.fp, fp) < 0.15)) return;
+  makeLocalMap(w, h, rgba, fp).catch((err) => status('Could not make a 3D map: ' + err.message, 'error'));
 }
+
+$('localMaps').checked = localGen.enabled;
+$('localMaps').addEventListener('change', (e) => {
+  localGen.enabled = e.target.checked;
+  try { localStorage.setItem('snatcher-vr.localmaps', e.target.checked ? '1' : '0'); } catch {}
+});
 
 function applyView() {
   const useMap = view3d.mode === 'depth' && !!depthLib.current;
@@ -468,5 +572,5 @@ renderer.setAnimationLoop(() => {
 
 fitCamera();
 refreshLibrary();
-window.__snatcherVR = { showFrame, depthLib, view3d, applyView };
+window.__snatcherVR = { showFrame, depthLib, view3d, applyView, localGen };
 if (!store.hasOPFS) status('This browser cannot keep files between visits, so you will need to pick them each time.', 'error');

@@ -61,6 +61,14 @@ against the known layout built by `test/make_layers_rom.py`).
 
 ## Depth maps
 
+**On the headset:** when a scene has no map, the page waits for the picture to hold still,
+crops to the illustration and runs Depth Anything V2 Small (`web/models/`, Apache-2.0, ONNX
+build from fabio-sim/Depth-Anything-ONNX) with ONNX Runtime Web in a background worker:
+on the GPU through WebGPU where the browser offers it, otherwise on the CPU. The model downloads
+once (~95 MB); maps are kept in the browser's storage, so each scene is only processed once.
+
+**Ahead of time:**
+
 `tools/make_depth.py` takes capture zips (from **Download all** on the page), finds the
 illustration in each scene, runs [Depth Anything V2](https://github.com/DepthAnything/Depth-Anything-V2)
 (small, ONNX build from [fabio-sim/Depth-Anything-ONNX](https://github.com/fabio-sim/Depth-Anything-ONNX))
