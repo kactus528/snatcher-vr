@@ -72,6 +72,31 @@ function toRGBA(f) {
   return out;
 }
 
+// Scale2x (EPX): doubles the picture, rounding off diagonals and curves
+// in pixel art without blurring it. Run twice for 4x.
+function scale2x(src, w, h) {
+  const a = new Uint32Array(src.buffer, src.byteOffset, w * h);
+  const W = w * 2, out = new Uint32Array(W * h * 2);
+  for (let y = 0; y < h; y++) {
+    const yu = y > 0 ? y - 1 : y, yd = y < h - 1 ? y + 1 : y;
+    for (let x = 0; x < w; x++) {
+      const E = a[y * w + x], B = a[yu * w + x], H = a[yd * w + x];
+      const D = a[y * w + (x > 0 ? x - 1 : x)], F = a[y * w + (x < w - 1 ? x + 1 : x)];
+      let e0 = E, e1 = E, e2 = E, e3 = E;
+      if (B !== H && D !== F) {
+        if (D === B) e0 = D;
+        if (B === F) e1 = F;
+        if (D === H) e2 = D;
+        if (H === F) e3 = F;
+      }
+      const o = (y * 2) * W + x * 2;
+      out[o] = e0; out[o + 1] = e1; out[o + W] = e2; out[o + W + 1] = e3;
+    }
+  }
+  return new Uint8ClampedArray(out.buffer);
+}
+let smoothScale = 1;   // 1 = original pixels, 4 = smoothed
+
 // layer tags, bottom-up to match the RGBA rows
 function flipRows(src, w, h) {
   const out = new Uint8Array(w * h);
@@ -97,9 +122,14 @@ function tick() {
   if (ran && fc !== lastFrameCount) {
     lastFrameCount = fc;
     const f = core.frame();
-    const rgba = toRGBA(f);
+    const rgba = toRGBA(f);                          // original pixels (recognition, captures)
     const tags = flipRows(core.tags(), f.w, f.h);
-    postMessage({ type: 'frame', w: f.w, h: f.h, rgba, tags }, [rgba.buffer, tags.buffer]);
+    const msg = { type: 'frame', w: f.w, h: f.h, rgba, tags }, transfer = [rgba.buffer, tags.buffer];
+    if (smoothScale === 4) {                         // smoothed copy for display only
+      msg.display = scale2x(scale2x(rgba, f.w, f.h), f.w * 2, f.h * 2);
+      msg.cw = f.w * 4; msg.ch = f.h * 4; transfer.push(msg.display.buffer);
+    }
+    postMessage(msg, transfer);
   }
   if (now - saveTimer > 5000) { saveTimer = now; persistSaves().catch(() => {}); }
   setTimeout(tick, 2);
@@ -123,6 +153,7 @@ onmessage = async (e) => {
         break;
       }
       case 'pad': pad = m.mask; break;
+      case 'smooth': smoothScale = m.scale; break;
       case 'gun': gun = m.gun; break;
       case 'reset': core && core.reset(); break;
       case 'pause': running = false; await persistSaves(); break;

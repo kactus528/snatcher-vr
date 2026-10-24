@@ -115,6 +115,14 @@ body:not([data-running]) .when-running{display:none}
         </select>
       </div>
       <div class="field">
+        <label for="smoothing">Smoothing</label>
+        <select id="smoothing">
+          <option value="sharp">Sharp: original pixels</option>
+          <option value="clean">Clean: pixels with smooth edges</option>
+          <option value="smooth">Smooth: rounded lines and curves</option>
+        </select>
+      </div>
+      <div class="field">
         <label for="depthStrength">Depth amount</label>
         <input id="depthStrength" type="range" min="0" max="1" step="0.01" value="0.3">
         <span id="depthVal" class="val">30 cm</span>

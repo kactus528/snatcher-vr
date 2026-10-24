@@ -69,7 +69,7 @@ const GROUPS = [
   { name: 'Sprites (front)',  tags: [8],         depth: 0.88, tint: [1.00, 0.35, 0.55] },
 ];
 
-const view3d = { mode: 'depth', strength: 0.3, cutouts: false }; // mode: flat | depth | layers
+const view3d = { mode: 'depth', strength: 0.3, cutouts: false, smoothing: 'clean' }; // mode: flat | depth | layers
 try { Object.assign(view3d, JSON.parse(localStorage.getItem('snatcher-vr.view')) || {}); } catch {}
 const saveView = () => { try { localStorage.setItem('snatcher-vr.view', JSON.stringify(view3d)); } catch {} };
 
@@ -80,6 +80,9 @@ function makeTex(data, w, h, format) {
   return t;
 }
 let colorTex = makeTex(new Uint8Array([20, 18, 30, 255]), 1, 1, THREE.RGBAFormat);
+colorTex.magFilter = colorTex.minFilter = THREE.LinearFilter;
+// shared by every screen material: colour texture size and smoothing mode (0 sharp, 1 clean/smooth)
+const smoothUniforms = { texSize: { value: new THREE.Vector2(1, 1) }, smoothMode: { value: 1 } };
 let tagTex = makeTex(new Uint8Array([0]), 1, 1, THREE.RedFormat);
 
 const screen = new THREE.Group();
@@ -93,12 +96,23 @@ const sheets = GROUPS.map((g, i) => {
       colorTex: { value: colorTex }, tagTex: { value: tagTex },
       tagMask: { value: tagMask }, full: { value: g.full ? 1 : 0 },
       tint: { value: new THREE.Vector3(...g.tint) }, showTint: { value: 0 },
+      texSize: smoothUniforms.texSize, smoothMode: smoothUniforms.smoothMode,
     },
     vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `
       uniform sampler2D colorTex; uniform sampler2D tagTex;
       uniform float tagMask[16]; uniform float full; uniform vec3 tint; uniform float showTint;
       varying vec2 vUv;
+      uniform vec2 texSize; uniform float smoothMode;
+      // sharp: hard pixels. otherwise 'sharp bilinear': blend only across the
+      // one screen pixel where two game pixels meet, so edges stop shimmering
+      vec4 sampleColor(sampler2D tex, vec2 uv) {
+        vec2 p = uv * texSize - 0.5, i = floor(p), f = p - i;
+        if (smoothMode < 0.5) return texture2D(tex, (floor(uv * texSize) + 0.5) / texSize);
+        vec2 fw = max(fwidth(p), vec2(1e-4));
+        f = clamp((f - 0.5) / fw + 0.5, 0.0, 1.0);
+        return texture2D(tex, (i + f + 0.5) / texSize);
+      }
       float inGroup(float t){
         float m = 0.0;
         for (int i = 0; i < 16; i++) { float id = (i == 15) ? 255.0 : float(i); if (abs(t - id) < 0.5) m = tagMask[i]; }
@@ -107,7 +121,7 @@ const sheets = GROUPS.map((g, i) => {
       void main(){
         float t = floor(texture2D(tagTex, vUv).r * 255.0 + 0.5);
         if (full < 0.5 && inGroup(t) < 0.5) discard;
-        vec4 c = texture2D(colorTex, vUv);
+        vec4 c = sampleColor(colorTex, vUv);
         if (showTint > 0.5 && !(full > 0.5 && inGroup(t) < 0.5)) {
           vec3 tc = tint;
           if (t > 254.5) tc = vec3(0.55);              // unknown: video mode without layer info (grey)
@@ -129,7 +143,8 @@ const sheets = GROUPS.map((g, i) => {
 // The picture is a grid of vertices pushed toward or away from you by the
 // matched scene's depth map. 128 in the map = the screen plane.
 const dioramaMat = new THREE.ShaderMaterial({
-  uniforms: { colorTex: { value: colorTex }, depthTex: { value: null }, amount: { value: 0 } },
+  uniforms: { colorTex: { value: colorTex }, depthTex: { value: null }, amount: { value: 0 },
+    texSize: smoothUniforms.texSize, smoothMode: smoothUniforms.smoothMode },
   vertexShader: `
     uniform sampler2D depthTex; uniform float amount; varying vec2 vUv;
     void main(){
@@ -138,7 +153,18 @@ const dioramaMat = new THREE.ShaderMaterial({
       vec3 p = position; p.z += d / 128.0 * amount;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
     }`,
-  fragmentShader: `uniform sampler2D colorTex; varying vec2 vUv; void main(){ gl_FragColor = texture2D(colorTex, vUv); }`,
+  fragmentShader: `uniform sampler2D colorTex; varying vec2 vUv;
+      uniform vec2 texSize; uniform float smoothMode;
+      // sharp: hard pixels. otherwise 'sharp bilinear': blend only across the
+      // one screen pixel where two game pixels meet, so edges stop shimmering
+      vec4 sampleColor(sampler2D tex, vec2 uv) {
+        vec2 p = uv * texSize - 0.5, i = floor(p), f = p - i;
+        if (smoothMode < 0.5) return texture2D(tex, (floor(uv * texSize) + 0.5) / texSize);
+        vec2 fw = max(fwidth(p), vec2(1e-4));
+        f = clamp((f - 0.5) / fw + 0.5, 0.0, 1.0);
+        return texture2D(tex, (i + f + 0.5) / texSize);
+      }
+    void main(){ gl_FragColor = sampleColor(colorTex, vUv); }`,
 });
 const diorama = new THREE.Mesh(new THREE.PlaneGeometry(1, 1, 192, 168), dioramaMat);
 diorama.scale.set(SCREEN_W, SCREEN_W * 0.75, 1);
@@ -321,6 +347,9 @@ function applyView() {
   });
   $('viewMode').value = view3d.mode;
   $('cutouts').checked = !!view3d.cutouts;
+  $('smoothing').value = view3d.smoothing;
+  smoothUniforms.smoothMode.value = view3d.smoothing === 'sharp' ? 0 : 1;
+  try { if (worker) worker.postMessage({ type: 'smooth', scale: view3d.smoothing === 'smooth' ? 4 : 1 }); } catch {} // worker not declared yet on first call
   $('depthStrength').value = view3d.strength;
   $('depthVal').textContent = Math.round(view3d.strength * 100) + ' cm';
 }
@@ -365,19 +394,24 @@ function fitCamera() {
 }
 new ResizeObserver(fitCamera).observe(view);
 
-function showFrame(w, h, rgba, tags) {
-  if (colorTex.image.width !== w || colorTex.image.height !== h) {
-    colorTex.dispose(); tagTex.dispose();
-    colorTex = makeTex(rgba, w, h, THREE.RGBAFormat);   // rows arrive bottom-up from the worker
-    tagTex = makeTex(tags, w, h, THREE.RedFormat);
-    for (const m of sheets) { m.material.uniforms.colorTex.value = colorTex; m.material.uniforms.tagTex.value = tagTex; }
+function showFrame(w, h, rgba, tags, display = null, cw = w, ch = h) {
+  const pix = display || rgba;
+  if (colorTex.image.width !== cw || colorTex.image.height !== ch) {
+    colorTex.dispose();
+    colorTex = makeTex(pix, cw, ch, THREE.RGBAFormat);   // rows arrive bottom-up from the worker
+    colorTex.magFilter = colorTex.minFilter = THREE.LinearFilter;
+    for (const m of sheets) m.material.uniforms.colorTex.value = colorTex;
     dioramaMat.uniforms.colorTex.value = colorTex;
-  } else {
-    colorTex.image.data = rgba; colorTex.needsUpdate = true;
-    tagTex.image.data = tags; tagTex.needsUpdate = true;
-  }
-  recogniseScene(w, h, rgba);
+    smoothUniforms.texSize.value.set(cw, ch);
+  } else { colorTex.image.data = pix; colorTex.needsUpdate = true; }
+  if (tagTex.image.width !== w || tagTex.image.height !== h) {
+    tagTex.dispose();
+    tagTex = makeTex(tags, w, h, THREE.RedFormat);
+    for (const m of sheets) m.material.uniforms.tagTex.value = tagTex;
+  } else { tagTex.image.data = tags; tagTex.needsUpdate = true; }
+  recogniseScene(w, h, rgba);                      // always on the original pixels
 }
+
 
 // drag to tilt the screen on a flat display, so the depth is visible without a headset
 let drag = null, tiltX = 0, tiltY = 0;
@@ -393,6 +427,7 @@ cv.addEventListener('pointerup', () => { drag = null; });
 cv.addEventListener('dblclick', () => { tiltX = tiltY = 0; });
 
 $('viewMode').addEventListener('change', (e) => { view3d.mode = e.target.value; saveView(); applyView(); status(MODE_NAMES[view3d.mode], 'ok'); });
+$('smoothing').addEventListener('change', (e) => { view3d.smoothing = e.target.value; saveView(); applyView(); });
 $('cutouts').addEventListener('change', (e) => { view3d.cutouts = e.target.checked; saveView(); applyView(); });
 $('depthStrength').addEventListener('input', (e) => { view3d.strength = +e.target.value; saveView(); applyView(); });
 applyView();
@@ -492,11 +527,12 @@ async function start() {
 function onWorker(e) {
   const m = e.data;
   if (m.type === 'frame') {
-    showFrame(m.w, m.h, m.rgba, m.tags);
+    showFrame(m.w, m.h, m.rgba, m.tags, m.display || null, m.cw || m.w, m.ch || m.h);
     const saving = captures.frame(m.w, m.h, m.rgba, m.tags);
     if (saving) saving.then((id) => id && status(`Captured ${id}`, 'ok')).catch((err) => status('Capture failed: ' + err.message, 'error'));
   }
-  else if (m.type === 'started') { status('Running. Keyboard: arrows, Z/X/C, Enter. In VR, see the button guide.', 'ok'); document.body.dataset.running = '1'; }
+  else if (m.type === 'started') {
+    worker.postMessage({ type: 'smooth', scale: view3d.smoothing === 'smooth' ? 4 : 1 }); status('Running. Keyboard: arrows, Z/X/C, Enter. In VR, see the button guide.', 'ok'); document.body.dataset.running = '1'; }
   else if (m.type === 'error') { status(m.msg, 'error'); }
   else if (m.type === 'log') { console.log(m.msg); }
   else if (m.type === 'state') store.writeState(m.slot, m.data).then(() => status('State saved.', 'ok'));
@@ -562,6 +598,7 @@ if (navigator.xr) {
 } else vrBtn.textContent = 'VR not available on this device';
 
 vrBtn.addEventListener('click', async () => {
+  if (renderer.xr.isPresenting) return;            // already in VR
   try {
     if (!started) await start();
     const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor'] });
