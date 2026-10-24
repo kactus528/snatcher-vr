@@ -78,7 +78,7 @@ function percentile(arr, p) {
 }
 
 // Model output (SIZE x SIZE relative depth, bigger = closer) → frame-sized 8-bit map
-export function depthMap(output, w, h, box) {
+export function depthMap(output, w, h, box, top) {
   const [x0, y0, x1, y1] = box, bw = x1 - x0, bh = y1 - y0;
   const lo = percentile(output, 0.02), hi = percentile(output, 0.98), span = hi - lo || 1;
   const map = new Uint8Array(w * h).fill(128);
@@ -92,7 +92,74 @@ export function depthMap(output, w, h, box) {
     const d = Math.min(1, Math.max(0, (v - lo) / span));
     map[(y0 + y) * w + x0 + x] = Math.round(FAR + d * (NEAR - FAR));
   }
+  if (top) flattenScreens(top, w, h, box, map);
   return blur(map, w, h);
+}
+
+/* Monitor and TV screens come out of the depth model as deep tubs (dark glass
+   reads as 'far'). Find large dark areas whose outline is nearly a rectangle and
+   make the whole rectangle flat, set slightly back from its frame.
+   Same rule as tools/make_depth.py. */
+function flattenScreens(top, w, h, box, map) {
+  const [bx0, by0, bx1, by1] = box, cw = bx1 - bx0, ch = by1 - by0, n = cw * ch;
+  const lum = new Float32Array(n);
+  for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) {
+    const i = ((by0 + y) * w + bx0 + x) * 4;
+    lum[y * cw + x] = top[i] * 0.3 + top[i + 1] * 0.59 + top[i + 2] * 0.11;
+  }
+  const morph = (src, keep) => {        // 3x3 erosion (keep=all) or dilation (keep=any)
+    const out = new Uint8Array(n);
+    for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) {
+      let all = 1, any = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx, yy = y + dy;
+        const v = xx < 0 || yy < 0 || xx >= cw || yy >= ch ? 0 : src[yy * cw + xx];
+        all &= v; any |= v;
+      }
+      out[y * cw + x] = keep === 'all' ? all : any;
+    }
+    return out;
+  };
+  const done = new Uint8Array(n);
+  for (const thr of [40, 60, 80]) {
+    let dark = new Uint8Array(n);
+    for (let i = 0; i < n; i++) dark[i] = lum[i] < thr ? 1 : 0;
+    dark = morph(morph(dark, 'all'), 'any');
+    const label = new Int32Array(n); let next = 1;
+    for (let s = 0; s < n; s++) {
+      if (!dark[s] || label[s]) continue;
+      const stack = [s], cells = []; label[s] = next;
+      let x0 = cw, y0 = ch, x1 = 0, y1 = 0;
+      while (stack.length) {
+        const p = stack.pop(), x = p % cw, y = (p / cw) | 0; cells.push(p);
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        if (x > 0 && dark[p - 1] && !label[p - 1]) { label[p - 1] = next; stack.push(p - 1); }
+        if (x < cw - 1 && dark[p + 1] && !label[p + 1]) { label[p + 1] = next; stack.push(p + 1); }
+        if (y > 0 && dark[p - cw] && !label[p - cw]) { label[p - cw] = next; stack.push(p - cw); }
+        if (y < ch - 1 && dark[p + cw] && !label[p + cw]) { label[p + cw] = next; stack.push(p + cw); }
+      }
+      const id = next++;
+      if (cells.length < 0.03 * n) continue;
+      if (x0 === 0 || y0 === 0 || x1 === cw - 1 || y1 === ch - 1) continue;
+      if (y1 - y0 < 12 || x1 - x0 < 12) continue;
+      let taken = false;
+      for (let y = y0; y <= y1 && !taken; y++) for (let x = x0; x <= x1; x++) if (done[y * cw + x]) { taken = true; break; }
+      if (taken) continue;
+      let edgeOn = 0, edgeAll = 0;
+      const on = (x, y) => (label[y * cw + x] === id ? 1 : 0);
+      for (let x = x0; x <= x1; x++) { edgeOn += on(x, y0) + on(x, y1); edgeAll += 2; }
+      for (let y = y0; y <= y1; y++) { edgeOn += on(x0, y) + on(x1, y); edgeAll += 2; }
+      if (edgeOn / edgeAll < 0.7) continue;
+      // depth of the frame: median of a 3-pixel ring around the rectangle
+      const ring = [];
+      for (let y = Math.max(0, y0 - 3); y <= Math.min(ch - 1, y1 + 3); y++)
+        for (let x = Math.max(0, x0 - 3); x <= Math.min(cw - 1, x1 + 3); x++)
+          if (x < x0 || x > x1 || y < y0 || y > y1) ring.push(map[(by0 + y) * w + bx0 + x]);
+      ring.sort((a, b) => a - b);
+      const v = Math.max(0, (ring[ring.length >> 1] || 128) - 8);
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { map[(by0 + y) * w + bx0 + x] = v; done[y * cw + x] = 1; }
+    }
+  }
 }
 
 // light 3x3 smoothing so the mesh doesn't tear at hard edges

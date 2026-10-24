@@ -1,3 +1,4 @@
 build-obj/
 test/*.bin
 node_modules/
+__pycache__/

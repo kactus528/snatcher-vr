@@ -247,7 +247,7 @@ fetch(new URL('./depth/manifest.json', import.meta.url)).then(r => r.ok ? r.json
 function depthTexture(scene) {
   let t = depthLib.textures.get(scene.id);
   if (!t) {
-    t = new THREE.TextureLoader().load(new URL('./depth/' + scene.map, import.meta.url).href);
+    t = new THREE.TextureLoader().load(new URL('./depth/' + scene.map + (scene.rev ? '?r=' + scene.rev : ''), import.meta.url).href);
     t.minFilter = t.magFilter = THREE.LinearFilter; t.generateMipmaps = false;
     depthLib.textures.set(scene.id, t);
   }
@@ -354,7 +354,7 @@ async function makeLocalMapInner(w, h, rgba, fp) {
     setBadge('off', 'NO 3D MAP');
     return;
   }
-  const map = depthMap(res.output, w, h, box);
+  const map = depthMap(res.output, w, h, box, top);
   const id = 'q' + Date.now().toString(36);
   const meta = { id, width: w, height: h, grid: [32, 24], fingerprint: [...fp], map: id + '.png', box, madeOn: 'headset' };
   const png = await mapToPNG(map, w, h);
@@ -395,6 +395,15 @@ function recogniseScene(w, h, rgba) {
   if (localGen.skip.some(k => k.w === w && k.h === h && distance(k.fp, fp) < 0.15)) return;
   makeLocalMap(w, h, rgba, fp).catch((err) => status('Could not make a 3D map: ' + err.message, 'error'));
 }
+
+$('clearLocalMaps').addEventListener('click', async () => {
+  try { await (await navigator.storage.getDirectory()).removeEntry('depthmaps', { recursive: true }); } catch {}
+  for (let i = depthLib.scenes.length - 1; i >= 0; i--) if (depthLib.scenes[i].madeOn === 'headset') {
+    depthLib.textures.delete(depthLib.scenes[i].id); depthLib.scenes.splice(i, 1);
+  }
+  localGen.skip = []; depthLib.current = undefined;
+  status('Maps made on this headset were deleted. Scenes will be redone as you see them (if the 3D maker is on).', 'ok');
+});
 
 $('localMaps').checked = localGen.enabled;
 $('localMaps').addEventListener('change', (e) => {
