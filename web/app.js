@@ -766,10 +766,11 @@ function updateGun() {
   // draw the laser to the hit (or 3 m out on a miss)
   let len = 3;
   if (hit) {
-    const local = new THREE.Vector3((hit.u - 0.5) * SCREEN_W, (0.5 - hit.v) * SCREEN_W * 0.75, 0);
-    const world = screen.localToWorld(local.clone());
-    len = Math.max(0.05, world.distanceTo(origin) - 0.02);
-    dot.position.copy(origin).addScaledVector(dirW, len); dot.quaternion.copy(screen.getWorldQuaternion(new THREE.Quaternion()));
+    // the dot goes exactly where the shot lands on the (possibly 3D) surface,
+    // so it lines up with the target from where your eyes are, not just the controller
+    const world = screen.localToWorld(new THREE.Vector3(hit.p.x, hit.p.y, hit.p.z + 0.004));
+    len = Math.max(0.05, world.distanceTo(origin));
+    dot.position.copy(world); dot.quaternion.copy(screen.getWorldQuaternion(new THREE.Quaternion()));
     dot.visible = true;
   }
   laser.position.copy(origin); laser.quaternion.copy(_q); laser.scale.set(1, 1, len); laser.visible = true;
@@ -795,6 +796,6 @@ renderer.setAnimationLoop(() => {
 
 fitCamera();
 refreshLibrary();
-window.__snatcherVR = { showFrame, depthLib, view3d, applyView, localGen, overlayCells: () => overlayCells, gunAim, screen, SCREEN_W, dioramaMat, THREE };
+window.__snatcherVR = { showFrame, depthLib, view3d, applyView, localGen, overlayCells: () => overlayCells, gunAim, gunState, screen, SCREEN_W, dioramaMat, THREE };
 if (crashedLastTime) status('The browser closed while making a 3D map last time, so making maps on the headset has been switched off. Scenes that already have maps still work.', 'error');
 if (!store.hasOPFS) status('This browser cannot keep files between visits, so you will need to pick them each time.', 'error');

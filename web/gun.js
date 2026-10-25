@@ -19,7 +19,8 @@ export function makeHeightField(image) {
 // o, dir: ray in screen-local space ({x,y,z}); W,H: picture size;
 // field: height field or null; amount: current depth scale (metres per 128 steps);
 // card: { z, covered(u, vTop) } for the floating panel card, or null.
-// Returns { u, v } with v measured from the top of the picture, or null on a miss.
+// Returns { u, v, p } (v from the top of the picture, p the 3D hit point in
+// screen-local space) or null on a miss.
 export function aim(o, dir, W, H, field, amount, card) {
   const toUV = (p) => ({ u: p.x / W + 0.5, v: 0.5 - p.y / H });
   const inside = (t) => t.u >= 0 && t.u <= 1 && t.v >= 0 && t.v <= 1;
@@ -29,19 +30,22 @@ export function aim(o, dir, W, H, field, amount, card) {
   // the floating card for panels sits in front of everything
   if (card) {
     const t = (card.z - o.z) / dir.z;
-    if (t > 0) { const uv = toUV(at(t)); if (inside(uv) && card.covered(uv.u, uv.v)) return uv; }
+    if (t > 0) { const p = at(t), uv = toUV(p); if (inside(uv) && card.covered(uv.u, uv.v)) return { ...uv, p }; }
   }
 
   const height = (p) => {
     if (!field || !amount) return 0;
     const { u, v } = toUV(p);
     if (u < 0 || u > 1 || v < 0 || v > 1) return 0;
-    const x = Math.min(field.w - 1, (u * field.w) | 0), y = Math.min(field.h - 1, (v * field.h) | 0);
-    return (field.d[y * field.w + x] - 128) / 128 * amount;
+    // bilinear, like the GPU samples the depth texture for the 3D surface
+    const fx = Math.min(field.w - 1.001, Math.max(0, u * field.w - 0.5)), fy = Math.min(field.h - 1.001, Math.max(0, v * field.h - 0.5));
+    const x = fx | 0, y = fy | 0, tx = fx - x, ty = fy - y, W2 = field.w, D = field.d;
+    const val = (D[y * W2 + x] * (1 - tx) + D[y * W2 + x + 1] * tx) * (1 - ty) + (D[(y + 1) * W2 + x] * (1 - tx) + D[(y + 1) * W2 + x + 1] * tx) * ty;
+    return (val - 128) / 128 * amount;
   };
   if (!field || !amount) {                       // flat screen: a plane at z = 0
     const t = -o.z / dir.z; if (t <= 0) return null;
-    const uv = toUV(at(t)); return inside(uv) ? uv : null;
+    const p = at(t), uv = toUV(p); return inside(uv) ? { ...uv, p } : null;
   }
   // march from above the tallest possible point to below the deepest
   const top = amount * 0.7 + 0.01, bottom = -amount * 0.7 - 0.01;
@@ -55,7 +59,8 @@ export function aim(o, dir, W, H, field, amount, card) {
     if (!above(t)) {
       let a = prev, b = t;                         // refine the crossing
       for (let k = 0; k < 8; k++) { const m = (a + b) / 2; if (above(m)) a = m; else b = m; }
-      const uv = toUV(at(b)); return inside(uv) ? uv : null;
+      const p = at(b); p.z = height(p);           // sit exactly on the surface
+      const uv = toUV(p); return inside(uv) ? { ...uv, p } : null;
     }
     prev = t;
   }
