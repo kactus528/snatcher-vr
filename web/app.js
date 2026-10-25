@@ -4,6 +4,7 @@ import { SEGA } from './core.js';
 import { Captures, fingerprint, distance, distanceIn, GW, GH } from './captures.js';
 import { SIZE, topDown, pictureBox, modelInput, depthMap, mapToPNG } from './depthgen.js';
 import { aim, makeHeightField } from './gun.js';
+import { buildLayers, aimLayers, MAX_LAYERS } from './layers3d.js';
 
 const $ = (id) => document.getElementById(id);
 const status = (msg, kind = '') => { const s = $('status'); s.textContent = msg; s.dataset.kind = kind; vrStatus(msg, kind); };
@@ -70,7 +71,7 @@ const GROUPS = [
   { name: 'Sprites (front)',  tags: [8],         depth: 0.88, tint: [1.00, 0.35, 0.55] },
 ];
 
-const view3d = { mode: 'depth', strength: 0.3, cutouts: false, smoothing: 'clean' }; // mode: flat | depth | layers
+const view3d = { mode: 'depth', strength: 0.3, cutouts: false, smoothing: 'clean', style: 'layers' }; // style: layers (3DS-like) | sculpt // mode: flat | depth | layers
 try { Object.assign(view3d, JSON.parse(localStorage.getItem('snatcher-vr.view')) || {}); } catch {}
 const saveView = () => { try { localStorage.setItem('snatcher-vr.view', JSON.stringify(view3d)); } catch {} };
 
@@ -239,6 +240,65 @@ const cardMat = new THREE.ShaderMaterial({
 const card = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), cardMat);
 card.scale.copy(diorama.scale); card.visible = false; card.renderOrder = 50;
 screen.add(card);
+
+/* ---- layered 3D (3DS style): the scene sliced into flat sheets by depth ---- */
+const layerIdxUniform = { value: makeTex(new Uint8Array([0]), 1, 1, THREE.RedFormat) };
+const idxSizeUniform = { value: new THREE.Vector2(1, 1) };
+const layerSheets = [];
+for (let k = 0; k < MAX_LAYERS; k++) {
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { colorTex: dioramaMat.uniforms.colorTex, layerIdx: layerIdxUniform, idxSize: idxSizeUniform,
+      donorTex: { value: makeTex(new Uint8Array(4), 1, 1, THREE.RGBAFormat) }, k: { value: k },
+      overlayTex: overlayUniform, texSize: smoothUniforms.texSize, smoothMode: smoothUniforms.smoothMode },
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: dioramaMat.fragmentShader.replace(/void main\(\)\{[\s\S]*\}\s*$/, `
+      uniform sampler2D layerIdx; uniform sampler2D donorTex; uniform vec2 idxSize; uniform float k;
+      void main(){
+        float t = floor(texture2D(layerIdx, vUv).r * 255.0 + 0.5);
+        bool panel = texture2D(overlayTex, vUv).r > 0.5;
+        vec2 uv = vUv;
+        bool fill = false;
+        if (panel) { if (k > 0.5) discard; fill = true; }    // panels live on the card; the back sheet fills behind them
+        else if (t > k + 0.5) fill = true;                     // something nearer covers this: show what's behind
+        else if (t < k - 0.5) discard;                         // belongs to a sheet further back
+        if (fill) {
+          vec4 dd = texture2D(donorTex, vUv) * 255.0;
+          uv = (vec2(dd.r + dd.g * 256.0, dd.b + dd.a * 256.0) + 0.5) / idxSize;
+        }
+        gl_FragColor = sampleColor(colorTex, uv);
+        if (fill) gl_FragColor.rgb *= 0.6;                     // filled-in background reads as shadow
+      }`),
+  });
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
+  m.scale.copy(diorama.scale); m.visible = false; m.renderOrder = 10 + k;
+  screen.add(m); layerSheets.push(m);
+}
+
+function ensureLayers(sceneMap) {
+  if (!sceneMap || sceneMap.built) return !!(sceneMap && sceneMap.built);
+  const field = heightField(sceneMap); if (!field) return false;
+  const built = buildLayers(field, sceneMap.box || null, 3);
+  const tex = (data, fmt) => makeTex(data, built.w, built.h, fmt);
+  built.idxTex = tex(built.idxUp, THREE.RedFormat);
+  built.donorTex = built.donors.map((d) => tex(d, THREE.RGBAFormat));
+  sceneMap.built = built;
+  return true;
+}
+let layersShown = null;
+function showLayers(sceneMap) {
+  const built = sceneMap && sceneMap.built;
+  layersShown = built || null;
+  layerSheets.forEach((m, k) => {
+    m.visible = !!built && k < built.layers.length;
+    if (!m.visible) return;
+    m.material.uniforms.donorTex.value = built.donorTex[k];
+  });
+  if (built) { layerIdxUniform.value = built.idxTex; idxSizeUniform.value.set(built.w, built.h); }
+}
+function placeLayers(amount) {
+  if (!layersShown) return;
+  layersShown.layers.forEach((l, k) => { layerSheets[k].position.z = (l.depth - 128) / 128 * amount; });
+}
 
 const depthLib = { scenes: [], textures: new Map(), current: null };
 fetch(new URL('./depth/manifest.json', import.meta.url)).then(r => r.ok ? r.json() : { scenes: [] })
@@ -412,20 +472,26 @@ $('localMaps').addEventListener('change', (e) => {
   try { localStorage.setItem('snatcher-vr.localmaps.v2', e.target.checked ? '1' : '0'); } catch {}
 });
 
+let mapActive = false;
 function applyView() {
   const useMap = view3d.mode === 'depth' && !!depthLib.current;
-  diorama.visible = useMap;
+  mapActive = useMap;
+  const layered = useMap && view3d.style === 'layers' && ensureLayers(depthLib.current);
+  diorama.visible = useMap && view3d.style === 'sculpt';
+  showLayers(layered ? depthLib.current : null);
   card.visible = useMap;
   card.position.z = view3d.strength * 0.55;     // floats a little in front of the picture
   sheets.forEach((m, i) => {
     const g = GROUPS[i];
     // no map: flat unless the layer cut-outs are switched on (or the colour view is showing)
     const cutouts = view3d.mode === 'layers' || (view3d.mode === 'depth' && view3d.cutouts);
-    m.visible = !useMap && (cutouts || g.full);
+    // flat picture: no map, or the layers for this map are still being prepared
+    m.visible = (!useMap && (cutouts || g.full)) || (useMap && !diorama.visible && !layersShown && g.full);
     m.position.z = cutouts ? g.depth * view3d.strength : 0;
     m.material.uniforms.showTint.value = view3d.mode === 'layers' ? 1 : 0;
   });
   $('viewMode').value = view3d.mode;
+  $('style3d').value = view3d.style;
   $('cutouts').checked = !!view3d.cutouts;
   $('smoothing').value = view3d.smoothing;
   smoothUniforms.smoothMode.value = view3d.smoothing === 'sharp' ? 0 : 1;
@@ -508,6 +574,7 @@ cv.addEventListener('pointerup', () => { drag = null; });
 cv.addEventListener('dblclick', () => { tiltX = tiltY = 0; });
 
 $('viewMode').addEventListener('change', (e) => { view3d.mode = e.target.value; saveView(); applyView(); status(MODE_NAMES[view3d.mode], 'ok'); });
+$('style3d').addEventListener('change', (e) => { view3d.style = e.target.value; saveView(); applyView(); });
 $('smoothing').addEventListener('change', (e) => { view3d.smoothing = e.target.value; saveView(); applyView(); });
 $('cutouts').addEventListener('change', (e) => { view3d.cutouts = e.target.checked; saveView(); applyView(); });
 $('depthStrength').addEventListener('input', (e) => { view3d.strength = +e.target.value; saveView(); applyView(); });
@@ -745,7 +812,7 @@ function gunAim(originWorld, dirWorld) {
   _inv.copy(screen.matrixWorld).invert();
   _o.copy(originWorld).applyMatrix4(_inv);
   _d.copy(dirWorld).transformDirection(_inv);
-  const mapped = diorama.visible ? depthLib.current : null;
+  const mapped = mapActive ? depthLib.current : null;
   const amount = mapped ? dioramaMat.uniforms.amount.value : 0;
   const ov = overlayTex.image;
   const cardHit = card_visible() ? { z: card.position.z, covered: (u, v) => {
@@ -753,6 +820,7 @@ function gunAim(originWorld, dirWorld) {
     const x = Math.min(ov.width - 1, (u * ov.width) | 0), y = Math.min(ov.height - 1, ((1 - v) * ov.height) | 0);  // mask rows are bottom-up
     return ov.data[y * ov.width + x] > 0;
   } } : null;
+  if (layersShown) return aimLayers(_o, _d, SCREEN_W, SCREEN_W * 0.75, layersShown, amount, cardHit);
   return aim(_o, _d, SCREEN_W, SCREEN_W * 0.75, heightField(mapped), amount, cardHit);
 }
 const card_visible = () => card.visible && overlayCount > 0;
@@ -797,8 +865,10 @@ renderer.setAnimationLoop(() => {
     const mask = readPad();
     if (mask !== lastMask) { lastMask = mask; worker.postMessage({ type: 'pad', mask }); }
   }
-  const target = diorama.visible ? view3d.strength : 0;
+  if (mapActive && view3d.style === 'layers' && !layersShown && ensureLayers(depthLib.current)) applyView();
+  const target = mapActive ? view3d.strength : 0;
   dioramaMat.uniforms.amount.value += (target - dioramaMat.uniforms.amount.value) * 0.12;
+  placeLayers(dioramaMat.uniforms.amount.value);
   if (depthDirty && !renderer.xr.isPresenting) { depthDirty = false; saveView(); }
   if (!renderer.xr.isPresenting) { screen.rotation.x += (tiltX - screen.rotation.x) * 0.15; screen.rotation.y += (tiltY - screen.rotation.y) * 0.15; }
   else screen.rotation.set(0, 0, 0);
@@ -808,6 +878,6 @@ renderer.setAnimationLoop(() => {
 
 fitCamera();
 refreshLibrary();
-window.__snatcherVR = { showFrame, depthLib, view3d, applyView, localGen, overlayCells: () => overlayCells, gunAim, gunState, screen, SCREEN_W, dioramaMat, THREE };
+window.__snatcherVR = { layerSheets, layersShown: () => layersShown, showFrame, depthLib, view3d, applyView, localGen, overlayCells: () => overlayCells, gunAim, gunState, screen, SCREEN_W, dioramaMat, THREE };
 if (crashedLastTime) status('The browser closed while making a 3D map last time, so making maps on the headset has been switched off. Scenes that already have maps still work.', 'error');
 if (!store.hasOPFS) status('This browser cannot keep files between visits, so you will need to pick them each time.', 'error');
