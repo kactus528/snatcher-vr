@@ -145,7 +145,12 @@ body:not([data-running]) .when-running{display:none}
         <input id="justifier" type="checkbox" checked>
         <label for="justifier" style="grid-column:2/4">Justifier in port 2, aimed with the right controller</label>
       </div>
-      <p class="hint">In Snatcher, open Options and set DEVICE to the Justifier. Then point the right controller at the screen and pull its trigger to shoot; the grip is the gun's start button. Shooting off the screen reloads.</p>
+      <div class="field">
+        <label for="gunOffset">Shot height</label>
+        <input id="gunOffset" type="range" min="-24" max="24" step="1" value="0">
+        <span id="gunOffsetVal" class="val">none</span>
+      </div>
+      <p class="hint">In Snatcher, open Options and set DEVICE to the Justifier. Then point the right controller at the screen and pull its trigger to shoot; the grip is the gun's start button. Shooting off the screen reloads. If shots land below the red dot, move Shot height toward up until they land on it.</p>
     </section>
     <section>
       <h2>Scene capture</h2>

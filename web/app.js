@@ -696,9 +696,19 @@ vrBtn.addEventListener('click', async () => {
 // controller aims it: its ray is traced against the (possibly 3D) screen, and the
 // trigger fires. Select the Justifier as DEVICE on Snatcher's options screen.
 const JUSTIFIER = (3 << 8) | 4;     // RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_LIGHTGUN, 2)
-const gunState = { enabled: true, last: '', trigger: false };
+const gunState = { enabled: true, last: '', trigger: false, offsetY: 0 };   // offsetY in game pixels, + = shots land lower
 try { gunState.enabled = localStorage.getItem('snatcher-vr.justifier') !== '0'; } catch {}
+try { gunState.offsetY = +localStorage.getItem('snatcher-vr.gunOffsetY') || 0; } catch {}
 $('justifier').checked = gunState.enabled;
+const showGunOffset = () => {
+  $('gunOffset').value = gunState.offsetY;
+  $('gunOffsetVal').textContent = gunState.offsetY === 0 ? 'none' : `${Math.abs(gunState.offsetY)} px ${gunState.offsetY < 0 ? 'up' : 'down'}`;
+};
+showGunOffset();
+$('gunOffset').addEventListener('input', (e) => {
+  gunState.offsetY = +e.target.value; showGunOffset();
+  try { localStorage.setItem('snatcher-vr.gunOffsetY', String(gunState.offsetY)); } catch {}
+});
 $('justifier').addEventListener('change', (e) => {
   gunState.enabled = e.target.checked;
   try { localStorage.setItem('snatcher-vr.justifier', e.target.checked ? '1' : '0'); } catch {}
@@ -775,7 +785,9 @@ function updateGun() {
   }
   laser.position.copy(origin); laser.quaternion.copy(_q); laser.scale.set(1, 1, len); laser.visible = true;
 
-  const gun = { x: hit ? hit.u : 0, y: hit ? hit.v : 0, buttons: (trigger ? 1 : 0) | (start ? 8 : 0), offscreen: !hit };
+  // the height adjustment shifts where the game is told you're aiming (224 lines tall)
+  const gy = hit ? Math.min(1, Math.max(0, hit.v + gunState.offsetY / 224)) : 0;
+  const gun = { x: hit ? hit.u : 0, y: gy, buttons: (trigger ? 1 : 0) | (start ? 8 : 0), offscreen: !hit };
   const key = `${gun.x.toFixed(4)},${gun.y.toFixed(4)},${gun.buttons},${gun.offscreen}`;
   if (key !== gunState.last) { gunState.last = key; worker.postMessage({ type: 'gun', gun }); }
 }
